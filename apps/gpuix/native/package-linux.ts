@@ -1,4 +1,12 @@
-import { chmod, copyFile, cp, mkdir, rm, writeFile } from "node:fs/promises";
+import {
+	chmod,
+	copyFile,
+	cp,
+	mkdir,
+	rm,
+	symlink,
+	writeFile,
+} from "node:fs/promises";
 import { createRequire } from "node:module";
 import { dirname, resolve } from "node:path";
 
@@ -155,9 +163,7 @@ exec "$ROOT/lib/1git/bun" run "$ROOT/lib/1git/app.js"
 );
 await chmod(resolve(bin, "1git"), 0o755);
 
-await writeFile(
-	resolve(share, "applications/1git.desktop"),
-	`[Desktop Entry]
+const desktopEntry = `[Desktop Entry]
 Type=Application
 Name=1git
 Comment=A native Git workspace with local and SSH repositories
@@ -166,7 +172,26 @@ Icon=1git
 Categories=Development;RevisionControl;
 Terminal=false
 StartupWMClass=1git
+`;
+
+await writeFile(resolve(share, "applications/1git.desktop"), desktopEntry);
+
+// appimagetool requires AppRun at the AppDir root, and validates the desktop
+// entry beside it. AppRun is the image entry point; it execs usr/bin/1git so the
+// same bundle also works when installed without the AppImage wrapper.
+await writeFile(
+	resolve(appDir, "AppRun"),
+	`#!/bin/sh
+HERE=$(dirname "$(readlink -f "$0")")
+exec "$HERE/usr/bin/1git"
 `
+);
+await chmod(resolve(appDir, "AppRun"), 0o755);
+
+await writeFile(resolve(appDir, "1git.desktop"), desktopEntry);
+await symlink(
+	resolve(share, "icons/hicolor/256x256/apps/1git.png"),
+	resolve(appDir, "1git.png")
 );
 
 process.stdout.write(`Assembled AppDir at ${appDir}\n`);

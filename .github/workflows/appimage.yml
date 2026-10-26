@@ -18,8 +18,9 @@ concurrency:
 
 env:
   TURBO_TELEMETRY_DISABLED: 1
+  # Upstream tags releases `continuous` and `1.9.x`; there is no `13`.
   # appimagetool shells out to mksquashfs; squashfs-tools supplies it.
-  APPIMAGETOOL_VERSION: "13"
+  APPIMAGETOOL_VERSION: "continuous"
 
 jobs:
   build:
@@ -27,11 +28,11 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@d6326836e25ad13d1d33a3c56d1c1e0a34b8f9db # v3
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
 
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+      - uses: oven-sh/setup-bun@v2
         with:
           bun-version-file: package.json
 
@@ -77,7 +78,7 @@ jobs:
       - name: Build AppImage
         run: appimagetool --no-appstream apps/gpuix/dist/appdir 1git.AppImage
 
-      - uses: actions/upload-artifact@ea165f2f57b7c17d7e7b0d164cd437df1e62bbe6 # v4
+      - uses: actions/upload-artifact@v7
         with:
           name: 1git-AppImage
           path: 1git.AppImage
