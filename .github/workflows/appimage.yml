@@ -37,7 +37,12 @@ jobs:
           bun-version-file: package.json
 
       - name: Install Rust
-        run: rustup toolchain install 1.97.1 --profile minimal --component rustfmt
+        run: |
+          rustup toolchain install 1.97.1 --profile minimal --component rustfmt
+          # Remote helpers are static musl builds, so cross-compiling them needs
+          # the musl target; the toolchain ships only the host gnu target.
+          rustup target add x86_64-unknown-linux-musl --toolchain 1.97.1
+          rustup target add aarch64-unknown-linux-musl --toolchain 1.97.1
 
       # GPUI on Linux links these at build time; the AppImage also bundles the
       # runtime subset so the result runs outside this runner.
