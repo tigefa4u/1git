@@ -53,11 +53,15 @@ import {
 	menuPlacementPlatformPatchPath,
 	systemAppearancePatchPath,
 	systemAppearancePlatformPatchPath,
+	linuxPlatformPatchPath,
 } from "./config";
 
-if (process.platform !== "darwin" || process.arch !== "arm64") {
+const isMac = process.platform === "darwin" && process.arch === "arm64";
+const isLinux = process.platform === "linux" && process.arch === "x64";
+
+if (!isMac && !isLinux) {
 	throw new Error(
-		"The local GPUIX build currently supports Apple Silicon macOS only."
+		"The local GPUIX build supports Apple Silicon macOS and x64 Linux only."
 	);
 }
 
@@ -105,6 +109,24 @@ if (
 
 	await run(["git", "submodule", "update", "--init", "--depth", "1", "zed"]);
 
+	// The `*-platform` patches edit Zed's crates; every other patch edits
+	// GPUIX's own `packages/native`.
+	const zedPatches = new Set([
+		closePlatformPatchPath,
+		contextMenuPlatformPatchPath,
+		contextMenuItemsPlatformPatchPath,
+		contextMenuOwnerPlatformPatchPath,
+		testSessionPlatformPatchPath,
+		liveFramePlatformPatchPath,
+		accountsPlatformPatchPath,
+		sidebarVibrancyPlatformPatchPath,
+		contextMenuIconsPlatformPatchPath,
+		roundedOverflowPlatformPatchPath,
+		windowAppearancePlatformPatchPath,
+		systemAppearancePlatformPatchPath,
+		menuPlacementPlatformPatchPath,
+	]);
+
 	const patches = [
 		patchPath,
 		checkboxPatchPath,
@@ -150,27 +172,16 @@ if (
 		diffTrailingContextPatchPath,
 		scrollbarVisibilityPatchPath,
 		fontFamiliesPatchPath,
+		// Must follow the 1git feature patches: it edits their context.
+		...(isLinux ? [linuxPlatformPatchPath] : []),
 	];
 
 	// Later patches can change an earlier patch's context. Unwind known patches
 	// in reverse order before applying the pinned stack, preserving unrelated edits.
 	for (const patch of patches.toReversed()) {
-		const patchDirectory =
-			patch === closePlatformPatchPath ||
-			patch === contextMenuPlatformPatchPath ||
-			patch === contextMenuItemsPlatformPatchPath ||
-			patch === contextMenuOwnerPlatformPatchPath ||
-			patch === testSessionPlatformPatchPath ||
-			patch === liveFramePlatformPatchPath ||
-			patch === accountsPlatformPatchPath ||
-			patch === sidebarVibrancyPlatformPatchPath ||
-			patch === contextMenuIconsPlatformPatchPath ||
-			patch === roundedOverflowPlatformPatchPath ||
-			patch === windowAppearancePlatformPatchPath ||
-			patch === systemAppearancePlatformPatchPath ||
-			patch === menuPlacementPlatformPatchPath
-				? resolve(source, "zed")
-				: source;
+		const patchDirectory = zedPatches.has(patch)
+			? resolve(source, "zed")
+			: source;
 
 		const applied = Bun.spawn(["git", "apply", "--reverse", "--check", patch], {
 			cwd: patchDirectory,
@@ -183,22 +194,9 @@ if (
 	}
 
 	for (const patch of patches) {
-		const patchDirectory =
-			patch === closePlatformPatchPath ||
-			patch === contextMenuPlatformPatchPath ||
-			patch === contextMenuItemsPlatformPatchPath ||
-			patch === contextMenuOwnerPlatformPatchPath ||
-			patch === testSessionPlatformPatchPath ||
-			patch === liveFramePlatformPatchPath ||
-			patch === accountsPlatformPatchPath ||
-			patch === sidebarVibrancyPlatformPatchPath ||
-			patch === contextMenuIconsPlatformPatchPath ||
-			patch === roundedOverflowPlatformPatchPath ||
-			patch === windowAppearancePlatformPatchPath ||
-			patch === systemAppearancePlatformPatchPath ||
-			patch === menuPlacementPlatformPatchPath
-				? resolve(source, "zed")
-				: source;
+		const patchDirectory = zedPatches.has(patch)
+			? resolve(source, "zed")
+			: source;
 
 		const patched = Bun.spawn(["git", "apply", "--reverse", "--check", patch], {
 			cwd: patchDirectory,
@@ -228,10 +226,13 @@ if (
 		],
 		resolve(source, "packages/native")
 	);
-	await copyFile(
-		resolve(source, "packages/native/target/release/libgpuix_native.dylib"),
-		`${nativeLibrary}.tmp`
+
+	const builtLibrary = resolve(
+		source,
+		`packages/native/target/release/libgpuix_native.${isMac ? "dylib" : "so"}`
 	);
+
+	await copyFile(builtLibrary, `${nativeLibrary}.tmp`);
 	await rename(`${nativeLibrary}.tmp`, nativeLibrary);
 	await writeFile(buildIdPath, nativeBuildId);
 	process.stdout.write(`Built local GPUIX addon: ${nativeLibrary}\n`);

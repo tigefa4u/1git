@@ -1,0 +1,268 @@
+diff --git a/packages/native/src/lib.rs b/packages/native/src/lib.rs
+--- a/packages/native/src/lib.rs
++++ b/packages/native/src/lib.rs
+@@ -20,6 +20,16 @@
+     families
+ }
+ 
++/// Non-macOS hosts enumerate through the GPUI text system, which resolves every
++/// font lookup, so the picker lists families that resolve.
++#[cfg(not(target_os = "macos"))]
++fn installed_font_families(state: &crate::renderer::DesktopState) -> Vec<String> {
++    let mut families = crate::renderer::all_font_families(state);
++    families.sort();
++    families.dedup();
++    families
++}
++
+ mod accessibility;
+ #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+ mod credentials;
+diff --git a/packages/native/src/renderer.rs b/packages/native/src/renderer.rs
+--- a/packages/native/src/renderer.rs
++++ b/packages/native/src/renderer.rs
+@@ -50,9 +50,18 @@
+ #[derive(Clone, Default)]
+ struct CloseProtection(Arc<Mutex<(bool, bool)>>);
+ 
++/// Same veto state on Linux: close protection is a renderer concern, and the
++/// window consults the global before it closes, exactly like macOS.
++#[cfg(any(target_os = "linux", target_os = "freebsd"))]
++#[derive(Clone, Default)]
++struct CloseProtection(Arc<Mutex<(bool, bool)>>);
++
+ #[cfg(target_os = "macos")]
+ impl gpui::Global for CloseProtection {}
+ 
++#[cfg(any(target_os = "linux", target_os = "freebsd"))]
++impl gpui::Global for CloseProtection {}
++
+ #[cfg(target_os = "macos")]
+ impl CloseProtection {
+     fn allow_close(&self) -> bool {
+@@ -62,6 +71,47 @@
+     }
+ }
+ 
++#[cfg(any(target_os = "linux", target_os = "freebsd"))]
++impl CloseProtection {
++    fn allow_close(&self) -> bool {
++        let mut state = self.0.lock().unwrap();
++        if state.0 { state.1 = true; }
++        !state.0
++    }
++}
++
++/// The GPUI text system and the compositor's color scheme both live on the UI
++/// thread, while `get_font_families` and `get_system_appearance` are called
++/// from the Node thread. `Arc<Mutex<_>>` carries them across that boundary.
++#[cfg(not(target_os = "macos"))]
++pub struct DesktopState {
++    text_system: Mutex<Option<Arc<gpui::TextSystem>>>,
++    appearance: Mutex<gpui::WindowAppearance>,
++}
++
++#[cfg(not(target_os = "macos"))]
++impl Default for DesktopState {
++    fn default() -> Self {
++        Self {
++            text_system: Mutex::new(None),
++            appearance: Mutex::new(gpui::WindowAppearance::Light),
++        }
++    }
++}
++
++/// Non-macOS hosts enumerate through the GPUI text system: the same catalog a
++/// font lookup resolves against, so the picker lists families that resolve.
++#[cfg(not(target_os = "macos"))]
++pub(crate) fn all_font_families(state: &DesktopState) -> Vec<String> {
++    state
++        .text_system
++        .lock()
++        .unwrap()
++        .as_ref()
++        .map(|system| system.all_font_names())
++        .unwrap_or_default()
++}
++
+ /// The Window menu items act on the focused window, and the root element is the
+ /// only place in GPUIX that has one. `crate::app_menu` owns everything else.
+ #[cfg(target_os = "macos")]
+@@ -967,6 +1017,10 @@
+ pub struct GpuixRenderer {
+     #[cfg(target_os = "macos")]
+     close_protection: CloseProtection,
++    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
++    close_protection: CloseProtection,
++    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
++    desktop_state: Arc<DesktopState>,
+     event_callback: Mutex<Option<Arc<ThreadsafeFunction<EventPayload>>>>,
+     tree: Arc<Mutex<RetainedTree>>,
+     initialized: Arc<Mutex<bool>>,
+@@ -1181,6 +1235,10 @@
+             event_callback: Mutex::new(event_callback.map(Arc::new)),
+             #[cfg(target_os = "macos")]
+             close_protection: CloseProtection::default(),
++            #[cfg(any(target_os = "linux", target_os = "freebsd"))]
++            close_protection: CloseProtection::default(),
++            #[cfg(any(target_os = "linux", target_os = "freebsd"))]
++            desktop_state: Arc::new(DesktopState::default()),
+             tree: Arc::new(Mutex::new(RetainedTree::new())),
+             initialized: Arc::new(Mutex::new(false)),
+             selection: SharedSelection::default(),
+@@ -1192,14 +1250,12 @@
+     }
+ 
+     /// Synchronous native veto; set before starting a protected operation.
+-    #[cfg(target_os = "macos")]
+     #[napi]
+     pub fn set_close_blocked(&self, blocked: bool) {
+         self.close_protection.0.lock().unwrap().0 = blocked;
+     }
+ 
+     /// Consume a blocked close/quit attempt without queuing a later quit.
+-    #[cfg(target_os = "macos")]
+     #[napi]
+     pub fn take_close_requested(&self) -> bool {
+         std::mem::take(&mut self.close_protection.0.lock().unwrap().1)
+@@ -1393,6 +1449,10 @@
+         let exit_startup_sender = startup_sender.clone();
+         let ui_running = self.ui_running.clone();
+         let ui_running_for_run = ui_running.clone();
++        #[cfg(any(target_os = "linux", target_os = "freebsd"))]
++        let close_protection = self.close_protection.clone();
++        #[cfg(any(target_os = "linux", target_os = "freebsd"))]
++        let desktop_state = Arc::clone(&self.desktop_state);
+ 
+         std::thread::Builder::new()
+             .name("gpuix-ui".to_string())
+@@ -1408,6 +1468,12 @@
+                         .run(move |cx| {
+                             crate::custom_elements::input::init(cx);
+                             crate::custom_elements::img::init(cx);
++                            #[cfg(any(target_os = "linux", target_os = "freebsd"))]
++                            {
++                                *desktop_state.text_system.lock().unwrap() =
++                                    Some(cx.text_system().clone());
++                                cx.set_global(close_protection);
++                            }
+                             let size = gpui::size(gpui::px(width as f32), gpui::px(height as f32));
+                             // A layer-shell surface is positioned by the compositor from its
+                             // anchor, so it opens at the origin; a normal window is centered.
+@@ -1422,6 +1488,12 @@
+                             let window = match cx.open_window(
+                                 to_gpui_window_options(&window_options, bounds),
+                                 |_window, cx| {
++                                    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
++                                    {
++                                        _window.on_window_should_close(cx, move |_, cx| {
++                                            cx.global::<CloseProtection>().allow_close()
++                                        });
++                                    }
+                                     cx.new(|_| GpuixView::new(tree, callback, title, selection))
+                                 },
+                             ) {
+@@ -1437,6 +1509,29 @@
+                                 }
+                             };
+ 
++                            // The compositor's color scheme surfaces as the
++                            // window's appearance; mirror it so
++                            // `get_system_appearance` can be read from the Node
++                            // thread while the UI thread owns the platform state.
++                            #[cfg(any(target_os = "linux", target_os = "freebsd"))]
++                            {
++                                let observed = Arc::clone(&desktop_state);
++                                window
++                                    .update(cx, |_view, window, _cx| {
++                                        let observed = Arc::clone(&observed);
++                                        *observed.appearance.lock().unwrap() = window.appearance();
++                                        // Keep the subscription alive for the
++                                        // window's lifetime.
++                                        std::mem::forget(window.observe_window_appearance(
++                                            move |window, _cx| {
++                                                *observed.appearance.lock().unwrap() =
++                                                    window.appearance();
++                                            },
++                                        ));
++                                    })
++                                    .ok();
++                            }
++
+                             cx.spawn(async move |cx| {
+                                 run_ui_commands(command_receiver, window, cx).await;
+                             })
+@@ -1823,24 +1918,39 @@
+     }
+ 
+     /// Installed CoreText families, without opening a system font panel.
+-    #[cfg(target_os = "macos")]
+     #[napi]
+     pub fn get_font_families(&self) -> Vec<String> {
+-        crate::installed_font_families()
++        #[cfg(target_os = "macos")]
++        {
++            crate::installed_font_families()
++        }
++        #[cfg(not(target_os = "macos"))]
++        {
++            crate::installed_font_families(&self.desktop_state)
++        }
+     }
+ 
+     /// Read the OS preference, unaffected by an explicit per-window appearance.
+-    #[cfg(target_os = "macos")]
+     #[napi]
+     pub fn get_system_appearance(&self) -> String {
+-        match gpui_macos::system_appearance() {
++        let appearance = {
++            #[cfg(target_os = "macos")]
++            {
++                gpui_macos::system_appearance()
++            }
++            #[cfg(not(target_os = "macos"))]
++            {
++                *self.desktop_state.appearance.lock().unwrap()
++            }
++        };
++        match appearance {
+             gpui::WindowAppearance::Dark | gpui::WindowAppearance::VibrantDark => "dark",
+             _ => "light",
+-        }.to_string()
++        }
++        .to_string()
+     }
+ 
+     /// Match this window's AppKit material and menus to its explicit app theme.
+-    #[cfg(target_os = "macos")]
+     #[napi]
+     pub fn set_window_appearance(&self, appearance: String) -> Result<()> {
+         let dark = match appearance.as_str() {
+@@ -1848,12 +1958,21 @@
+             "dark" => true,
+             _ => return Err(Error::from_reason("Window appearance must be light or dark")),
+         };
+-        update_window_without_view(|window, _cx| -> Result<()> {
+-            gpui_macos::set_window_appearance(window, dark)
+-                .map_err(|error| Error::from_reason(error.to_string()))?;
+-            window.refresh();
+-            Ok(())
+-        })?
++        #[cfg(target_os = "macos")]
++        {
++            update_window_without_view(|window, _cx| -> Result<()> {
++                gpui_macos::set_window_appearance(window, dark)
++                    .map_err(|error| Error::from_reason(error.to_string()))?;
++                window.refresh();
++                Ok(())
++            })?
++        }
++        #[cfg(not(target_os = "macos"))]
++        {
++            // No per-window material on Linux; the CSS theme still switches.
++            let _ = dark;
++        }
++        Ok(())
+     }
+ 
+     #[napi]

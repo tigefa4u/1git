@@ -167,6 +167,12 @@ export const fontFamiliesPatchPath = resolve(
 	import.meta.dir,
 	"font-families.patch"
 );
+/** Enables the portable renderer APIs (close protection, system appearance, font families) on Linux. */
+export const linuxPlatformPatchPath = resolve(
+	import.meta.dir,
+	"linux-platform.patch"
+);
+
 export const nativeBuildId = createHash("sha256")
 	.update(nativeRevision)
 	.update(readFileSync(patchPath))
@@ -213,5 +219,8 @@ export const nativeBuildId = createHash("sha256")
 	.update(readFileSync(diffTrailingContextPatchPath))
 	.update(readFileSync(scrollbarVisibilityPatchPath))
 	.update(readFileSync(fontFamiliesPatchPath))
+	.update(
+		process.platform === "linux" ? readFileSync(linuxPlatformPatchPath) : ""
+	)
 	.update(`${process.platform}-${process.arch}-release-v1`)
 	.digest("hex");
