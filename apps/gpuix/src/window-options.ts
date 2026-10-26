@@ -10,7 +10,18 @@ import { handleRepositoryFilterKeyDown } from "./feature/repository-workspace/li
 import { handleWorkspaceKeyDown } from "./feature/repository-workspace/lib/repository-filter-shortcut";
 import { handleCloneNavigation } from "./feature/repository-workspace/lib/repository-filter-shortcut";
 
-/** Native window chrome and keyboard traversal; application content stays transparent around the workspace. */
+/**
+ * Native window chrome and keyboard traversal; application content stays
+ * transparent around the workspace.
+ *
+ * `windowBackground: "blurred"` is a macOS-only material. On Linux it degrades
+ * to a transparent surface with no blur, so the compositor's rounded corners and
+ * edges let the wallpaper through. Linux asks for an opaque window instead: the
+ * client area paints its own background, and only the compositor's decoration
+ * rounding remains visible.
+ */
+const isMacOs = process.platform === "darwin";
+
 export const windowOptions: RenderOptions = {
 	height: 820,
 	width: 1280,
@@ -18,11 +29,11 @@ export const windowOptions: RenderOptions = {
 	minWidth: 640,
 	minHeight: 420,
 	title: "1git",
-	titlebarTransparent: true,
-	appOwnsTitlebarDrag: true,
-	windowBackground: "blurred",
-	trafficLightX: 16,
-	trafficLightY: 13,
+	titlebarTransparent: isMacOs,
+	appOwnsTitlebarDrag: isMacOs,
+	windowBackground: isMacOs ? "blurred" : "opaque",
+	trafficLightX: isMacOs ? 16 : undefined,
+	trafficLightY: isMacOs ? 13 : undefined,
 	onKeyDown(event, renderer) {
 		if (handlePopoverKeyDown(event, renderer)) return;
 
