@@ -134,9 +134,11 @@ jobs:
           test -f "$ASSET"
           sha256sum "$ASSET" >"$ASSET.sha256"
 
+          # This job downloads the artifact without a checkout, so gh has no git
+          # remote to resolve the repository from; pass it explicitly.
           # Reuse an existing release for the tag, or create one when the tag was
           # pushed without it, so a push from the macOS release path is untouched.
-          if ! gh release view "$TAG" >/dev/null 2>&1; then
+          if ! gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             {
               printf '## Download\n\n'
               printf '[1git for Linux](https://github.com/%s/releases/download/%s/%s)\n\n' \
@@ -148,7 +150,7 @@ jobs:
               printf 'Built from source commit `%s`.\n' "$GITHUB_SHA"
             } > notes.md
 
-            gh release create "$TAG" --title "1git ${TAG#v}" --notes-file notes.md
+            gh release create "$TAG" -R "$GITHUB_REPOSITORY" --title "1git ${TAG#v}" --notes-file notes.md
           fi
 
-          gh release upload "$TAG" "$ASSET" "$ASSET.sha256" --clobber
+          gh release upload "$TAG" -R "$GITHUB_REPOSITORY" "$ASSET" "$ASSET.sha256" --clobber
