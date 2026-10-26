@@ -77,6 +77,12 @@ jobs:
           sudo mv appimagetool /usr/local/bin/appimagetool
 
       - name: Assemble AppDir
+        # The remote helper is built from native/remote-helper, which has no
+        # rust-toolchain.toml, so it resolves the runner's host toolchain. Pin
+        # the same toolchain the native addon uses, otherwise the musl targets
+        # installed above are invisible to this build.
+        env:
+          RUSTUP_TOOLCHAIN: "1.97.1"
         run: bun native/package-linux.ts
         working-directory: apps/gpuix
 
