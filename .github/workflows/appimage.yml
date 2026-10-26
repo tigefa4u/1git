@@ -27,6 +27,8 @@ jobs:
     name: Build 1git.AppImage
     runs-on: ubuntu-24.04
     timeout-minutes: 60
+    outputs:
+      asset: ${{ steps.asset.outputs.asset }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -86,11 +88,67 @@ jobs:
         run: bun native/package-linux.ts
         working-directory: apps/gpuix
 
-      - name: Build AppImage
-        run: appimagetool --no-appstream apps/gpuix/dist/appdir 1git.AppImage
+      # The tag is what makes the version unambiguous, so only tag runs get the
+      # release asset name; every other event builds the plain name instead.
+      - name: Name the AppImage
+        id: asset
+        run: |
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            version=${GITHUB_REF_NAME#v}
+            echo "asset=1git-$version-linux-x86_64.AppImage" >> "$GITHUB_OUTPUT"
+          else
+            echo "asset=1git.AppImage" >> "$GITHUB_OUTPUT"
+          fi
 
-      - uses: actions/upload-artifact@v7
+      - name: Build AppImage
+        run: appimagetool --no-appstream apps/gpuix/dist/appdir "${{ steps.asset.outputs.asset }}"
+
+      - name: Upload AppImage artifact
+        uses: actions/upload-artifact@v7
         with:
           name: 1git-AppImage
-          path: 1git.AppImage
+          path: ${{ steps.asset.outputs.asset }}
           if-no-files-found: error
+
+  release:
+    name: Publish 1git.AppImage
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: 1git-AppImage
+          path: dist
+
+      - name: Attach the AppImage to the release
+        working-directory: dist
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          ASSET: ${{ needs.build.outputs.asset }}
+        run: |
+          set -euo pipefail
+          test -f "$ASSET"
+          sha256sum "$ASSET" >"$ASSET.sha256"
+
+          # Reuse an existing release for the tag, or create one when the tag was
+          # pushed without it, so a push from the macOS release path is untouched.
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            {
+              printf '## Download\n\n'
+              printf '[1git for Linux](https://github.com/%s/releases/download/%s/%s)\n\n' \
+                "$GITHUB_REPOSITORY" "$TAG" "$ASSET"
+              printf 'Requires glibc 2.35 or later, Vulkan 1.1 or later and a Wayland or X11 session.\n\n'
+              printf '## Checksum\n\n```\n'
+              cat "$ASSET.sha256"
+              printf '```\n\n'
+              printf 'Built from source commit `%s`.\n' "$GITHUB_SHA"
+            } > notes.md
+
+            gh release create "$TAG" --title "1git ${TAG#v}" --notes-file notes.md
+          fi
+
+          gh release upload "$TAG" "$ASSET" "$ASSET.sha256" --clobber
