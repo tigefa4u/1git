@@ -1,5 +1,5 @@
 /**
- * Covers: fixed Home navigation and tooltip placement, retained drafts/selection, repository opening, background sync and session intent.
+ * Covers: fixed Home navigation and tooltip placement, retained drafts/selection, repository opening, launcher ownership across spaces, background sync and session intent.
  * Real: App, workspace/session models and native layout, pointer and keyboard events.
  * Doubles: account catalog, repository reads, Git sync, session save and offscreen focus notification; no network or user preferences.
  * Requires: patched GPUIX native renderer with macOS graphics access.
@@ -9,6 +9,8 @@ import { controlSize, iconSize, radius, spacing } from "@1git/design-tokens";
 import { createTestRoot, type TestRoot } from "@gpuix/react/testing";
 import { flushSync, handleGpuixEvent } from "@gpuix/react";
 import { App } from "../../src/app";
+import type { LauncherRequest } from "../../src/launcher/launcher-protocol";
+import type { LauncherRequestHandler } from "../../src/launcher/launcher-service";
 import { Accounts } from "../../src/feature/accounts/lib/accounts";
 import { AccountStore } from "../../src/feature/accounts/lib/account-store";
 import type { RepositoryReader } from "../../src/feature/repository-workspace/lib/repository-reader";
@@ -25,9 +27,10 @@ import { windowOptions } from "../../src/window-options";
 
 let root: TestRoot;
 let accounts: Accounts;
+let launcherListener: LauncherRequestHandler | undefined;
 const snapshot = repositorySnapshot([changedFile("a.ts"), changedFile("b.ts")]);
 
-const read = mock<typeof RepositoryReader.read>(async (path) => ({
+const mockRead: typeof RepositoryReader.read = async (path) => ({
 	ok: true,
 	value: {
 		...snapshot,
@@ -35,7 +38,9 @@ const read = mock<typeof RepositoryReader.read>(async (path) => ({
 		remoteCount: 1,
 		head: { ...snapshot.head, upstream: "origin/main" },
 	},
-}));
+});
+
+const read = mock<typeof RepositoryReader.read>(mockRead);
 
 const initial: WorkspaceSessionDocument = {
 	version: 1,
@@ -54,7 +59,8 @@ beforeEach(() => {
 		onKeyDown: windowOptions.onKeyDown,
 	});
 	root.renderer.clockPause();
-	read.mockClear();
+	read.mockReset();
+	read.mockImplementation(mockRead);
 	accounts = new Accounts(new AccountStore("/unused/home-accounts.json"), {
 		async read() {
 			throw new Error("No credentials expected");
@@ -66,6 +72,7 @@ beforeEach(() => {
 });
 afterEach(() => {
 	root.unmount();
+	launcherListener = undefined;
 	mock.restore();
 });
 
@@ -106,9 +113,14 @@ function tabCount() {
 	return Object.values(root.renderer.getA11yTree().nodes ?? {}).filter(
 		(item) =>
 			item.aria?.role === "Tab" &&
-			!["Changes", "History", "Stashes", "Tile view", "List view"].includes(
-				item.aria.label ?? ""
-			)
+			![
+				"Changes",
+				"History",
+				"Stashes",
+				"Graph",
+				"Tile view",
+				"List view",
+			].includes(item.aria.label ?? "")
 	).length;
 }
 
@@ -230,6 +242,302 @@ it("starts on a shared Home screen and repeated clicks never create empty tabs",
 	expect(read).not.toHaveBeenCalled();
 });
 
+it("serializes launcher requests and deduplicates canonical repository roots", async () => {
+	const repositoryRead = async (path: string) => ({
+		ok: true as const,
+		value: {
+			...snapshot,
+			repository: {
+				...snapshot.repository,
+				root: path.startsWith("/test/project/") ? "/test/project" : path,
+			},
+			remoteCount: 1,
+			head: { ...snapshot.head, upstream: "origin/main" },
+		},
+	});
+
+	read.mockImplementationOnce(repositoryRead);
+	read.mockImplementationOnce(repositoryRead);
+	read.mockImplementationOnce(repositoryRead);
+
+	const subscribeLauncherRequests = (listener: LauncherRequestHandler) => {
+		launcherListener = listener;
+
+		return () => {
+			if (launcherListener === listener) launcherListener = undefined;
+		};
+	};
+
+	root.render(
+		<App
+			accounts={accounts}
+			readRepository={read}
+			subscribeLauncherRequests={subscribeLauncherRequests}
+		/>
+	);
+	await settle();
+
+	const request = (path: string): LauncherRequest => ({ version: 1, path });
+
+	launcherListener?.(request("/test/project/src/index.ts"));
+	launcherListener?.(request("/test/project"));
+	launcherListener?.(request("/test/third"));
+	await settle();
+
+	expect(read.mock.calls.map(([path]) => path)).toEqual([
+		"/test/project/src/index.ts",
+		"/test/project",
+		"/test/third",
+	]);
+	expect(tabCount()).toBe(2);
+	expect(node("workspace-1").customProps?.["aria-selected"]).toBe(false);
+	expect(node("workspace-2").customProps?.["aria-selected"]).toBe(true);
+});
+
+it("focuses an already-open launcher repository in its owning space", async () => {
+	const workSpace = "00000000-0000-4000-8000-000000000001";
+
+	const subscribeLauncherRequests = (listener: LauncherRequestHandler) => {
+		launcherListener = listener;
+
+		return () => {
+			if (launcherListener === listener) launcherListener = undefined;
+		};
+	};
+
+	root.render(
+		<App
+			accounts={accounts}
+			initialSession={{
+				version: 1,
+				activeId: "workspace-1",
+				activeSpaceId: "default",
+				spaces: [
+					{
+						id: "default",
+						name: "Default",
+						icon: "layers",
+						activeId: "workspace-1",
+						repositories: [],
+						discovery: { folders: [], hidden: [] },
+						library: { starred: [], view: "tiles" },
+					},
+					{
+						id: workSpace,
+						name: "Work",
+						icon: "work",
+						activeId: "workspace-2",
+						repositories: ["/test/project"],
+						discovery: { folders: [], hidden: [] },
+						library: { starred: [], view: "tiles" },
+					},
+				],
+				tabs: [
+					{ id: "workspace-1", path: "/test/current", draft: "" },
+					{
+						id: "workspace-2",
+						spaceId: workSpace,
+						path: "/test/project",
+						draft: "Keep this draft",
+					},
+				],
+			}}
+			readRepository={read}
+			subscribeLauncherRequests={subscribeLauncherRequests}
+		/>
+	);
+	await settle();
+
+	launcherListener?.({ version: 1, path: "/test/project" });
+	await settle();
+
+	expect(node("workspace-2").customProps?.["aria-selected"]).toBe(true);
+	expect(root.renderer.findByTestId("workspace-1")).toBeUndefined();
+});
+
+it("returns to the request owner when the read finishes after a space switch", async () => {
+	const workSpace = "00000000-0000-4000-8000-000000000001";
+	const pending = Promise.withResolvers<Awaited<ReturnType<typeof read>>>();
+	let defer = false;
+
+	read.mockImplementation(async (path) => {
+		if (defer && path === "/test/project") return await pending.promise;
+
+		return {
+			ok: true as const,
+			value: {
+				...snapshot,
+				repository: { ...snapshot.repository, root: path },
+				remoteCount: 1,
+				head: { ...snapshot.head, upstream: "origin/main" },
+			},
+		};
+	});
+
+	const subscribeLauncherRequests = (listener: LauncherRequestHandler) => {
+		launcherListener = listener;
+
+		return () => {
+			if (launcherListener === listener) launcherListener = undefined;
+		};
+	};
+
+	root.render(
+		<App
+			accounts={accounts}
+			initialSession={{
+				version: 1,
+				activeId: "workspace-1",
+				activeSpaceId: "default",
+				spaces: [
+					{
+						id: "default",
+						name: "Default",
+						icon: "layers",
+						activeId: "workspace-1",
+						repositories: ["/test/project"],
+						discovery: { folders: [], hidden: [] },
+						library: { starred: [], view: "tiles" },
+					},
+					{
+						id: workSpace,
+						name: "Work",
+						icon: "work",
+						activeId: "workspace-2",
+						repositories: [],
+						discovery: { folders: [], hidden: [] },
+						library: { starred: [], view: "tiles" },
+					},
+				],
+				tabs: [
+					{ id: "workspace-1", path: "/test/project", draft: "" },
+					{
+						id: "workspace-2",
+						spaceId: workSpace,
+						path: "/test/current",
+						draft: "Work draft",
+					},
+				],
+			}}
+			readRepository={read}
+			subscribeLauncherRequests={subscribeLauncherRequests}
+		/>
+	);
+	await settle();
+	defer = true;
+	launcherListener?.({ version: 1, path: "/test/project" });
+	await Bun.sleep(0);
+	root.renderer.flush();
+
+	root.renderer.simulateKeystrokes("ctrl-cmd-right");
+	await settle();
+	expect(node("workspace-2").customProps?.["aria-selected"]).toBe(true);
+
+	pending.resolve({
+		ok: true,
+		value: {
+			...snapshot,
+			repository: { ...snapshot.repository, root: "/test/project" },
+			remoteCount: 1,
+			head: { ...snapshot.head, upstream: "origin/main" },
+		},
+	});
+	await settle();
+
+	expect(node("workspace-1").customProps?.["aria-selected"]).toBe(true);
+	expect(root.renderer.findByTestId("workspace-2")).toBeUndefined();
+});
+
+it.each(["error", "throw"] as const)(
+	"does not add a failed launcher path to a space selected during the read (%s)",
+	async (failure) => {
+		const workSpace = "00000000-0000-4000-8000-000000000001";
+		const pending = Promise.withResolvers<Awaited<ReturnType<typeof read>>>();
+
+		read.mockImplementation(async (path) => {
+			if (path === "/test/not-repo") return await pending.promise;
+
+			return {
+				ok: true,
+				value: {
+					...snapshot,
+					repository: { ...snapshot.repository, root: path },
+				},
+			};
+		});
+		root.render(
+			<App
+				accounts={accounts}
+				initialSession={{
+					version: 1,
+					activeId: "workspace-1",
+					activeSpaceId: "default",
+					spaces: [
+						{
+							id: "default",
+							name: "Default",
+							icon: "layers",
+							activeId: "workspace-1",
+							repositories: [],
+							discovery: { folders: [], hidden: [] },
+							library: { starred: [], view: "tiles" },
+						},
+						{
+							id: workSpace,
+							name: "Work",
+							icon: "work",
+							activeId: "workspace-2",
+							repositories: [],
+							discovery: { folders: [], hidden: [] },
+							library: { starred: [], view: "tiles" },
+						},
+					],
+					tabs: [
+						{ id: "workspace-1", path: "/test/project", draft: "" },
+						{
+							id: "workspace-2",
+							spaceId: workSpace,
+							path: "/test/current",
+							draft: "Work draft",
+						},
+					],
+				}}
+				readRepository={read}
+				subscribeLauncherRequests={(listener) => {
+					launcherListener = listener;
+
+					return () => {
+						launcherListener = undefined;
+					};
+				}}
+			/>
+		);
+		await settle();
+		launcherListener?.({ version: 1, path: "/test/not-repo" });
+		await Bun.sleep(0);
+		root.renderer.flush();
+		root.renderer.simulateKeystrokes("ctrl-cmd-right");
+		await settle();
+		expect(node("workspace-2").customProps?.["aria-selected"]).toBe(true);
+
+		if (failure === "throw") pending.reject(new Error("Not a Git repository"));
+		else
+			pending.resolve({
+				ok: false,
+				error: {
+					code: "not-a-repository",
+					operation: "open-repository",
+					retryable: false,
+					message: "Not a Git repository",
+				},
+			});
+
+		await settle();
+		expect(node("workspace-2").customProps?.["aria-selected"]).toBe(true);
+		expect(root.renderer.findByTestId("workspace-3")).toBeUndefined();
+	}
+);
+
 it("restores Home selection while saved repositories load without stealing the active view", async () => {
 	root.render(
 		<App
@@ -281,10 +589,12 @@ it("preserves tabs, drafts, checked files and selection and reuses an already-op
 	click("welcome-repository-/test/project");
 	await settle();
 	expect(node("commit-message").customProps?.value).toBe("Keep draft");
-	expect(node("include-a.ts").customProps?.["aria-checked"]).toBe(false);
+	expect(node("include-a.ts").customProps?.["aria-checked"]).toBe(true);
 	expect(node("entry-a.ts").customProps?.["aria-selected"]).toBe(true);
 	expect(tabCount()).toBe(2);
-	expect(read).toHaveBeenCalledTimes(2);
+	expect(
+		read.mock.calls.filter(([path]) => path === "/test/project")
+	).toHaveLength(1);
 	click("workspace-home");
 	click("welcome-repository-/test/third");
 	await settle();

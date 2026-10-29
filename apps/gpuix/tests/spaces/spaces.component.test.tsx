@@ -1,5 +1,5 @@
 /**
- * Covers: space creation, rail/menu/swipe navigation, isolated repository opening, draft restoration and restart.
+ * Covers: space creation/deletion, rail/menu/swipe navigation, isolated repository opening, draft restoration and restart.
  * Real: App, space/session models, shared controls and native layout/keyboard events.
  * Doubles: account catalog, repository reads, native menu/picker tracking, trackpad phase boundaries and session writes; no user data or network.
  * Requires: patched GPUIX renderer and macOS graphics access.
@@ -18,6 +18,7 @@ import { SpaceManager } from "../../src/feature/spaces/space-manager";
 import { repositorySnapshot } from "../_shared/repository-snapshot";
 import { windowOptions } from "../../src/window-options";
 import { WorkspaceRail } from "../../src/feature/repository-workspace/components/workspace-rail";
+import type { KeybindOverrides } from "../../src/feature/keybinds/keybinds";
 
 let root: TestRoot;
 let accounts: Accounts;
@@ -84,6 +85,23 @@ function latest() {
 	return WorkspaceSession.parse(JSON.stringify(document));
 }
 
+async function latestWhen(
+	predicate: (document: WorkspaceSessionDocument) => boolean
+): Promise<WorkspaceSessionDocument> {
+	const deadline = Date.now() + 3000;
+
+	while (Date.now() < deadline) {
+		const document = save.mock.calls.at(-1)?.[0];
+
+		if (document && predicate(document))
+			return WorkspaceSession.parse(JSON.stringify(document));
+
+		await Bun.sleep(10);
+	}
+
+	throw new Error("Session save did not reach the expected state.");
+}
+
 beforeEach(() => {
 	root = createTestRoot({
 		width: 980,
@@ -109,7 +127,7 @@ afterEach(() => {
 });
 
 for (const appearance of ["light", "dark"] as const) {
-	it(`creates an icon space above Settings and restores separate tabs/drafts after a ${appearance} restart`, async () => {
+	it(`creates an icon space beside Settings and restores separate tabs/drafts after a ${appearance} restart`, async () => {
 		root.render(
 			<App
 				accounts={accounts}
@@ -149,7 +167,7 @@ for (const appearance of ["light", "dark"] as const) {
 		const editor = bounds("space-editor");
 
 		expect(editor.y).toBeGreaterThanOrEqual(12);
-		expect(editor.y + editor.height).toBeLessThanOrEqual(628);
+		expect(editor.y + editor.height).toBeLessThanOrEqual(640);
 
 		if (process.env.GPUIX_SPACES_SCREENSHOT)
 			root.renderer.captureScreenshot(
@@ -159,6 +177,9 @@ for (const appearance of ["light", "dark"] as const) {
 		click("space-editor-save");
 		await settle();
 		expect(root.renderer.findByTestId("space-editor")).toBeUndefined();
+		expect(node("settings-view")).toBeDefined();
+		root.renderer.simulateKeystrokes("escape");
+		await settle();
 		expect(node("rail-spaces").customProps?.["aria-label"]).toBe(
 			"Spaces: Personal"
 		);
@@ -206,7 +227,11 @@ for (const appearance of ["light", "dark"] as const) {
 		click("rail-spaces");
 		await settle();
 		expect(node("commit-message").customProps?.value).toBe("Personal draft");
-		const document = latest();
+		const document = await latestWhen(
+			(saved) =>
+				saved.activeSpaceId === personalId &&
+				saved.tabs.some((tab) => tab.draft === "Personal draft")
+		);
 
 		expect(
 			document.spaces?.find((space) => space.id === personalId)
@@ -252,13 +277,108 @@ it("validates the name and cancels icon edits without saving", async () => {
 	expect(saved).not.toHaveBeenCalled();
 });
 
+it("confirms space deletion, supports keyboard cancellation and preserves drafts after restart", async () => {
+	showSwipeSpaces(2);
+	await settle();
+	const workId = spaceIds[1];
+
+	spyOn(NativeFileMenu, "showItems").mockReturnValue({
+		kind: "select",
+		id: workId,
+	});
+	click("rail-spaces");
+	await settle();
+	root.renderer.simulateKeystrokes("cmd-,");
+	await settle();
+	click("settings-spaces");
+	await settle();
+	expect(root.renderer.findByTestId("space-delete-default")).toBeUndefined();
+	click(`space-edit-${workId}`);
+	await settle();
+	click(`space-delete-${workId}`);
+	await settle();
+	expect(latest().spaces).toHaveLength(2);
+	expect(root.renderer.getAllText()).toContain("Delete Work?");
+	expect(root.renderer.getAllText()).toContain(
+		"Repositories, open tabs, and drafts will move to Default."
+	);
+	expect(root.renderer.getFocusedElementId()).toBe(
+		node("space-delete-cancel").id
+	);
+	root.renderer.simulateKeystrokes("enter");
+	await settle();
+	expect(root.renderer.findByTestId("space-delete-dialog")).toBeUndefined();
+	expect(latest().spaces).toHaveLength(2);
+	expect(root.renderer.getFocusedElementId()).toBe(
+		node(`space-delete-${workId}`).id
+	);
+	click(`space-delete-${workId}`);
+	await settle();
+	root.renderer.simulateKeystrokes("escape");
+	await settle();
+	expect(root.renderer.findByTestId("space-delete-dialog")).toBeUndefined();
+	expect(latest().activeSpaceId).toBe(workId);
+	click(`space-delete-${workId}`);
+	await settle();
+
+	if (process.env.GPUIX_SPACES_DELETE_SCREENSHOT)
+		root.renderer.captureScreenshot(process.env.GPUIX_SPACES_DELETE_SCREENSHOT);
+
+	click("space-delete-confirm");
+	await settle();
+	expect(root.renderer.findByTestId("space-delete-dialog")).toBeUndefined();
+	expect(root.renderer.findByTestId(`space-delete-${workId}`)).toBeUndefined();
+	const document = latest();
+
+	expect(document.spaces?.map((space) => space.id)).toEqual(["default"]);
+	expect(document.activeSpaceId).toBe("default");
+	expect(document.activeId).toBe("workspace-2");
+	const repositoryTabs = document.tabs.filter(
+		(tab) => tab.kind === "repository"
+	);
+
+	expect(repositoryTabs.map((tab) => tab.spaceId)).toEqual([
+		"default",
+		"default",
+	]);
+	expect(repositoryTabs.map((tab) => tab.draft)).toEqual([
+		"Draft 0",
+		"Draft 1",
+	]);
+	expect(document.tabs.filter((tab) => tab.kind === "settings")).toHaveLength(
+		1
+	);
+	expect(document.tabs.find((tab) => tab.kind === "settings")?.spaceId).toBe(
+		"default"
+	);
+	root.unmount();
+	root = createTestRoot({
+		width: 980,
+		height: 640,
+		onKeyDown: windowOptions.onKeyDown,
+	});
+	root.renderer.clockPause();
+	root.render(
+		<App
+			accounts={accounts}
+			readRepository={read}
+			discoverRepositories={scan}
+			saveSession={save}
+			initialSession={document}
+		/>
+	);
+	await settle();
+	expect(root.renderer.findByTestId("rail-spaces")).toBeUndefined();
+	expect(node("commit-message").customProps?.value).toBe("Draft 1");
+}, 15000);
+
 const spaceIds = [
 	"default",
 	"00000000-0000-4000-8000-000000000001",
 	"00000000-0000-4000-8000-000000000002",
-];
+] as const;
 
-function showSwipeSpaces(count = 3): void {
+function showSwipeSpaces(count = 3, keybinds?: KeybindOverrides): void {
 	root.render(
 		<App
 			accounts={accounts}
@@ -267,6 +387,7 @@ function showSwipeSpaces(count = 3): void {
 			saveSession={save}
 			initialSession={{
 				version: 1,
+				keybinds,
 				activeId: "workspace-1",
 				activeSpaceId: "default",
 				spaces: spaceIds.slice(0, count).map((id, index) => ({
@@ -288,6 +409,76 @@ function showSwipeSpaces(count = 3): void {
 		/>
 	);
 }
+
+it("switches spaces with Control Command arrows from the draft editor and stops at the ends", async () => {
+	showSwipeSpaces();
+	await settle();
+	click("commit-message");
+	root.renderer.simulateKeystrokes("ctrl-cmd-left");
+	await settle();
+	expect(latest().activeSpaceId).toBe("default");
+	root.renderer.simulateKeystrokes("ctrl-cmd-right");
+	await settle();
+	expect(latest().activeSpaceId).toBe(spaceIds[1]);
+	expect(node("commit-message").customProps?.value).toBe("Draft 1");
+	root.renderer.simulateKeystrokes("ctrl-cmd-right");
+	await settle();
+	expect(latest().activeSpaceId).toBe(spaceIds[2]);
+	root.renderer.simulateKeystrokes("ctrl-cmd-right");
+	await settle();
+	expect(latest().activeSpaceId).toBe(spaceIds[2]);
+	root.renderer.simulateKeystrokes("ctrl-cmd-left");
+	await settle();
+	expect(latest().activeSpaceId).toBe(spaceIds[1]);
+	expect(node("commit-message").customProps?.value).toBe("Draft 1");
+	expect(latest().tabs.map((tab) => tab.draft)).toEqual([
+		"Draft 0",
+		"Draft 1",
+		"Draft 2",
+	]);
+});
+
+it("uses custom space shortcuts and only blocks switching behind a modal", async () => {
+	const keybinds = {
+		"previous-space": "ctrl-shift-p",
+		"next-space": "ctrl-shift-n",
+	};
+
+	showSwipeSpaces(3, keybinds);
+	await settle();
+	root.renderer.simulateKeystrokes("ctrl-cmd-right");
+	await settle();
+	expect(latest().activeSpaceId).toBe("default");
+	root.renderer.simulateKeystrokes("ctrl-shift-n");
+	await settle();
+	expect(latest().activeSpaceId).toBe(spaceIds[1]);
+	expect(latest().keybinds).toEqual(keybinds);
+	root.renderer.simulateKeystrokes("cmd-,");
+	await settle();
+	root.renderer.simulateKeystrokes("ctrl-shift-n");
+	await settle();
+	expect(node("settings-view").style.visibility).toBe("hidden");
+	expect(latest().activeSpaceId).toBe(spaceIds[2]);
+	root.renderer.simulateKeystrokes("ctrl-shift-p");
+	await settle();
+	expect(node("settings-view")).toBeDefined();
+	expect(latest().activeSpaceId).toBe(spaceIds[1]);
+	click("settings-spaces");
+	click("space-create");
+	await settle();
+	root.renderer.simulateKeystrokes("ctrl-shift-n");
+	await settle();
+	expect(node("space-editor")).toBeDefined();
+	expect(latest().activeSpaceId).toBe(spaceIds[1]);
+	root.renderer.simulateKeystrokes("escape");
+	await settle();
+	root.renderer.simulateKeystrokes("escape");
+	await settle();
+	root.renderer.simulateKeystrokes("ctrl-shift-p");
+	await settle();
+	expect(latest().activeSpaceId).toBe("default");
+	expect(node("commit-message").customProps?.value).toBe("Draft 0");
+}, 10000);
 
 function railPhase(phase: string, extra: Partial<EventPayload> = {}): void {
 	flushSync(() =>
@@ -409,7 +600,7 @@ it("uses the Settings rail and cannot switch twice when it returns to a workspac
 	railPhase("started");
 	railMove(-60);
 	await settle();
-	expect(root.renderer.findByTestId("settings-view")).toBeUndefined();
+	expect(node("settings-view").style.visibility).toBe("hidden");
 	expect(node("rail-spaces").customProps?.["aria-label"]).toBe("Spaces: Work");
 	railMove(-200);
 	await settle();
@@ -448,4 +639,50 @@ it("does not switch with one space or a disabled rail", async () => {
 	railPhase("started");
 	railMove(-60);
 	expect(onSwipe).toHaveBeenCalledWith("next");
+});
+
+it("cancels a space panel before leaving Settings and persists its colour only on Save", async () => {
+	root.render(
+		<App
+			accounts={accounts}
+			saveSession={save}
+			initialSession={{ version: 1, tabs: [], activeId: null }}
+		/>
+	);
+	await settle();
+	root.renderer.simulateKeystrokes("cmd-,");
+	await settle();
+	click("settings-spaces");
+	click("space-create");
+	await settle();
+	enter("space-name", "Projects");
+	click("space-color-a478ef");
+	click("space-editor-save");
+	await settle();
+	const space = latest().spaces?.find((item) => item.name === "Projects");
+
+	if (!space) throw new Error("Missing saved space");
+
+	expect(space.color).toBe("#a478ef");
+	expect(root.renderer.getFocusedElementId()).toBe(node("space-create").id);
+	click(`space-edit-${space.id}`);
+	await settle();
+	enter("space-name", "Unsaved");
+	root.renderer.simulateKeystrokes("escape");
+	await settle();
+	expect(root.renderer.findByTestId("space-editor")).toBeUndefined();
+	expect(node("settings-view")).toBeDefined();
+	expect(root.renderer.getFocusedElementId()).toBe(
+		node(`space-edit-${space.id}`).id
+	);
+	expect(latest().spaces?.find((item) => item.id === space.id)?.name).toBe(
+		"Projects"
+	);
+	click(`space-edit-${space.id}`);
+	await settle();
+	click("settings-privacy");
+	await settle();
+	click("settings-spaces");
+	await settle();
+	expect(root.renderer.findByTestId("space-editor")).toBeUndefined();
 });

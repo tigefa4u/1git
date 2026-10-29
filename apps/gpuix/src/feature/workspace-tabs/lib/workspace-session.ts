@@ -1,4 +1,6 @@
 import { GuidedTour, type TourTips } from "../../guided-tour/guided-tour";
+import { Keybinds, type KeybindOverrides } from "../../keybinds/keybinds";
+import type { RepositoryFileLayout } from "../../repository-workspace/lib/repository-file-tree";
 import {
 	TypographyPreferences,
 	type AppTypography,
@@ -26,7 +28,10 @@ import {
 	type RepositoryPatternChoices,
 } from "../../repository-appearance/repository-patterns";
 import { RepositoryWorkspaceModel } from "../../repository-workspace/lib/repository-workspace-model";
-import type { WorkspaceTabsState } from "./workspace-tabs-model";
+import type {
+	WorkspaceTabKind,
+	WorkspaceTabsState,
+} from "./workspace-tabs-model";
 import type { RepositoryView } from "../../repository-workspace/types";
 import {
 	defaultDiffSettings,
@@ -59,6 +64,8 @@ export interface WorkspaceSessionDocument {
 	readonly activeSpaceId?: string;
 	readonly tabs: readonly {
 		readonly id: string;
+		/** Added in-place so sessions written before tab kinds remain readable. */
+		readonly kind?: WorkspaceTabKind;
 		readonly spaceId?: string;
 		readonly path: string | null;
 		readonly draft: string;
@@ -69,15 +76,19 @@ export interface WorkspaceSessionDocument {
 	readonly repositoryDiscovery?: RepositoryDiscoveryPreferences;
 	readonly repositoryLibrary?: RepositoryLibraryPreferences;
 	readonly diffSettings?: DiffSettings;
+	readonly fileListLayout?: RepositoryFileLayout;
 	readonly appearance?: AppAppearancePreference;
 	readonly commitTypeBadges?: boolean;
+	readonly autoIncludeChanges?: boolean;
 	readonly smoothTransitions?: boolean;
 	readonly showScrollbars?: boolean;
+	readonly showGrain?: boolean;
 	readonly typography?: AppTypography;
 	readonly repositoryColors?: RepositoryColorChoices;
 	readonly repositoryPatterns?: RepositoryPatternChoices;
 	readonly onboarding?: OnboardingStep;
 	readonly tips?: TourTips;
+	readonly keybinds?: KeybindOverrides;
 }
 
 const tabIdPattern = /^workspace-([1-9]\d*)$/;
@@ -153,6 +164,15 @@ export class WorkspaceSession {
 		};
 	}
 
+	private static tabKind(
+		savedKind: unknown,
+		path: string | null
+	): WorkspaceTabKind {
+		if (savedKind === "settings" || savedKind === "empty") return savedKind;
+
+		return typeof path === "string" ? "repository" : "empty";
+	}
+
 	static parse(content: string): WorkspaceSessionDocument {
 		const value: unknown = JSON.parse(content);
 
@@ -173,8 +193,12 @@ export class WorkspaceSession {
 		const ids = new Set<string>();
 
 		for (const tab of value.tabs) {
+			if (!isRecord(tab))
+				throw new Error("The saved session contains an invalid workspace.");
+
+			const savedKind = tab.kind;
+
 			if (
-				!isRecord(tab) ||
 				typeof tab.id !== "string" ||
 				!tabIdPattern.test(tab.id) ||
 				!Number.isSafeInteger(Number(tab.id.slice("workspace-".length)) + 1) ||
@@ -187,24 +211,50 @@ export class WorkspaceSession {
 					(typeof tab.path === "string" &&
 						isAbsolute(tab.path) &&
 						!tab.path.includes("\0"))
-				)
+				) ||
+				(savedKind !== undefined &&
+					savedKind !== "repository" &&
+					savedKind !== "empty" &&
+					savedKind !== "settings")
 			)
 				throw new Error("The saved session contains an invalid workspace.");
+
+			const kind = WorkspaceSession.tabKind(savedKind, tab.path);
+
+			const path: string | null =
+				kind === "repository" && typeof tab.path === "string" ? tab.path : null;
+
+			const draft = kind === "settings" ? "" : String(tab.draft);
+
+			const navigation =
+				kind === "repository"
+					? WorkspaceSession.navigation(tab.navigation)
+					: undefined;
 
 			ids.add(tab.id);
 			tabs.push({
 				id: tab.id,
+				kind,
 				...(spaces
 					? {
 							spaceId:
 								typeof tab.spaceId === "string" ? tab.spaceId : "default",
 						}
 					: {}),
-				path: tab.path,
-				draft: tab.draft,
-				navigation: WorkspaceSession.navigation(tab.navigation),
+				path,
+				draft,
+				...(navigation ? { navigation } : {}),
 			});
 		}
+
+		const settingsId = tabs.find((tab) => tab.kind === "settings")?.id;
+
+		const normalizedTabs = tabs.filter(
+			(tab) => tab.kind !== "settings" || tab.id === settingsId
+		);
+
+		const tabsInSpace = (spaceId: string) =>
+			normalizedTabs.filter((tab) => (tab.spaceId ?? "default") === spaceId);
 
 		const tips = GuidedTour.parse(value.tips);
 		const diffSettings = WorkspaceSession.diffSettings(value.diffSettings);
@@ -228,13 +278,11 @@ export class WorkspaceSession {
 				? {
 						spaces: spaces.map((space) => ({
 							...space,
-							activeId: tabs.some(
-								(tab) =>
-									tab.id === space.activeId &&
-									(tab.spaceId ?? "default") === space.id
+							activeId: tabsInSpace(space.id).some(
+								(tab) => tab.id === space.activeId
 							)
 								? space.activeId
-								: null,
+								: (tabsInSpace(space.id)[0]?.id ?? null),
 						})),
 						activeSpaceId,
 					}
@@ -242,11 +290,14 @@ export class WorkspaceSession {
 			...(!RepositoryLibrary.isDefault(repositoryLibrary)
 				? { repositoryLibrary }
 				: {}),
-			tabs,
+			tabs: normalizedTabs,
 			...(value.appearance === "light" ||
 			value.appearance === "dark" ||
 			value.appearance === "system"
 				? { appearance: value.appearance }
+				: {}),
+			...(typeof value.autoIncludeChanges === "boolean"
+				? { autoIncludeChanges: value.autoIncludeChanges }
 				: {}),
 			...(typeof value.commitTypeBadges === "boolean"
 				? { commitTypeBadges: value.commitTypeBadges }
@@ -254,8 +305,14 @@ export class WorkspaceSession {
 			...(value.typography === undefined
 				? {}
 				: { typography: TypographyPreferences.parse(value.typography) }),
+			...(typeof value.showGrain === "boolean"
+				? { showGrain: value.showGrain }
+				: {}),
 			...(typeof value.showScrollbars === "boolean"
 				? { showScrollbars: value.showScrollbars }
+				: {}),
+			...(value.fileListLayout === "list" || value.fileListLayout === "tree"
+				? { fileListLayout: value.fileListLayout }
 				: {}),
 			...(typeof value.smoothTransitions === "boolean"
 				? { smoothTransitions: value.smoothTransitions }
@@ -268,6 +325,9 @@ export class WorkspaceSession {
 				? { onboarding: value.onboarding }
 				: {}),
 			...(tips ? { tips } : {}),
+			...(value.keybinds === undefined
+				? {}
+				: { keybinds: Keybinds.parse(value.keybinds) }),
 			...(diffSettings ? { diffSettings } : {}),
 			...(Object.keys(repositoryColors).length ? { repositoryColors } : {}),
 			...(Object.keys(repositoryPatterns).length ? { repositoryPatterns } : {}),
@@ -293,14 +353,15 @@ export class WorkspaceSession {
 				value.activeId === null
 					? null
 					: typeof value.activeId === "string" &&
-						  tabs.some(
+						  normalizedTabs.some(
 								(tab) =>
 									tab.id === value.activeId &&
 									(tab.spaceId ?? "default") === activeSpaceId
 						  )
 						? value.activeId
-						: (tabs.find((tab) => (tab.spaceId ?? "default") === activeSpaceId)
-								?.id ?? null),
+						: (normalizedTabs.find(
+								(tab) => (tab.spaceId ?? "default") === activeSpaceId
+							)?.id ?? null),
 		};
 	}
 
@@ -317,10 +378,15 @@ export class WorkspaceSession {
 		smoothTransitions?: boolean,
 		showScrollbars?: boolean,
 		typography?: AppTypography,
-		tips?: TourTips
+		tips?: TourTips,
+		keybinds?: KeybindOverrides,
+		fileListLayout?: RepositoryFileLayout,
+		showGrain?: boolean
 	): WorkspaceSessionDocument {
 		return {
 			version: 1,
+			autoIncludeChanges: state.autoIncludeChanges ?? false,
+			...(fileListLayout ? { fileListLayout } : {}),
 			...(state.spaces
 				? {
 						spaces: state.spaces.map((space) =>
@@ -340,9 +406,11 @@ export class WorkspaceSession {
 				? { typography: TypographyPreferences.parse(typography) }
 				: {}),
 			...(showScrollbars !== undefined ? { showScrollbars } : {}),
+			...(showGrain !== undefined ? { showGrain } : {}),
 			...(smoothTransitions !== undefined ? { smoothTransitions } : {}),
 			...(onboarding ? { onboarding } : {}),
 			...(tips ? { tips } : {}),
+			...(keybinds && Object.keys(keybinds).length ? { keybinds } : {}),
 			...(diffSettings ? { diffSettings } : {}),
 			...(repositoryDiscovery &&
 			(repositoryDiscovery.folders.length || repositoryDiscovery.hidden.length)
@@ -357,65 +425,126 @@ export class WorkspaceSession {
 			...(state.recentRepositories !== undefined
 				? { recentRepositories: state.recentRepositories }
 				: {}),
-			tabs: state.tabs.map(({ id, spaceId, workspace }) => ({
+			tabs: state.tabs.map(({ id, kind, spaceId, workspace }) => ({
 				id,
+				kind,
 				...(spaceId ? { spaceId } : {}),
-				path: workspace.repository?.root ?? workspace.repositoryPath,
-				draft: workspace.amend?.previousMessage ?? workspace.commitMessage,
-				navigation: {
-					view: workspace.view,
-					changes: workspace.views.changes.selectedId,
-					// File history is temporary navigation; restore the full list's selection after restart.
-					history: workspace.history.file
-						? (workspace.history.normal?.view.selectedId ?? null)
-						: workspace.views.history.selectedId,
-					historyFile: workspace.history.file
-						? (workspace.history.normal?.view.files.selectedId ?? null)
-						: workspace.views.history.files.selectedId,
-					historyLimit:
-						workspace.restoreHistoryLimit ??
-						Math.min(
-							historyRestoreMaxRows,
-							(workspace.history.file
-								? (workspace.history.normal?.entries.length ?? 0)
-								: workspace.entries.history.length) + historyRestoreExtraRows
-						),
-					stashes: workspace.views.stashes.selectedId,
-					stashFile: workspace.views.stashes.files.selectedId,
-				},
+				path:
+					kind === "repository"
+						? (workspace.repository?.root ?? workspace.repositoryPath)
+						: null,
+				draft:
+					kind === "settings"
+						? ""
+						: (workspace.amend?.previousMessage ?? workspace.commitMessage),
+				...(kind === "repository"
+					? {
+							navigation: {
+								view: workspace.view,
+								changes: workspace.views.changes.selectedId,
+								// File history is temporary navigation; restore the full list's selection after restart.
+								history: workspace.history.file
+									? (workspace.history.normal?.view.selectedId ?? null)
+									: workspace.views.history.selectedId,
+								historyFile: workspace.history.file
+									? (workspace.history.normal?.view.files.selectedId ?? null)
+									: workspace.views.history.files.selectedId,
+								historyLimit:
+									workspace.restoreHistoryLimit ??
+									Math.min(
+										historyRestoreMaxRows,
+										(workspace.history.file
+											? (workspace.history.normal?.entries.length ?? 0)
+											: workspace.entries.history.length) +
+											historyRestoreExtraRows
+									),
+								stashes: workspace.views.stashes.selectedId,
+								stashFile: workspace.views.stashes.files.selectedId,
+							},
+						}
+					: {}),
 			})),
 			activeId: state.activeId,
 		};
 	}
 
 	static restore(document: WorkspaceSessionDocument): WorkspaceTabsState {
+		const settingsId = document.tabs.find((tab) => tab.kind === "settings")?.id;
+
+		const tabs = document.tabs
+			.filter((tab) => tab.kind !== "settings" || tab.id === settingsId)
+			.map(({ id, kind: savedKind, spaceId, path, draft, navigation }) => {
+				const kind = WorkspaceSession.tabKind(savedKind, path);
+
+				const repositoryPath = kind === "repository" ? path : null;
+
+				return {
+					id,
+					kind,
+					...(spaceId ? { spaceId } : {}),
+					name:
+						kind === "settings"
+							? "Settings"
+							: repositoryPath
+								? basename(repositoryPath)
+								: "Welcome",
+					workspace: {
+						...RepositoryWorkspaceModel.create(),
+						repositoryPath,
+						loading: repositoryPath !== null,
+						commitMessage: kind === "settings" ? "" : draft,
+						...(kind === "repository" && navigation
+							? WorkspaceSession.restoreNavigation(navigation)
+							: {}),
+					},
+				};
+			});
+
+		const spaces = document.spaces?.map((space) => {
+			const owned = tabs.filter(
+				(tab) => (tab.spaceId ?? "default") === space.id
+			);
+
+			return {
+				...space,
+				activeId: owned.some((tab) => tab.id === space.activeId)
+					? space.activeId
+					: (owned[0]?.id ?? null),
+			};
+		});
+
+		const activeSpaceId = document.activeSpaceId ?? "default";
+
+		const activeTabs = tabs.filter(
+			(tab) => (tab.spaceId ?? "default") === activeSpaceId
+		);
+
+		const activeId =
+			document.activeId === null
+				? null
+				: activeTabs.some((tab) => tab.id === document.activeId)
+					? document.activeId
+					: (activeTabs[0]?.id ?? null);
+
 		return {
 			preview: false,
-			...(document.spaces
+			autoIncludeChanges: document.autoIncludeChanges ?? false,
+			...(spaces
 				? {
-						spaces: document.spaces,
-						activeSpaceId: document.activeSpaceId ?? "default",
+						spaces,
+						activeSpaceId,
 					}
 				: {}),
 			recentRepositories: [
 				...new Set(
 					document.recentRepositories ??
-						document.tabs.flatMap((tab) => (tab.path ? [tab.path] : []))
+						document.tabs.flatMap((tab) =>
+							tab.kind === "repository" && tab.path ? [tab.path] : []
+						)
 				),
 			].slice(0, 100),
-			tabs: document.tabs.map(({ id, spaceId, path, draft, navigation }) => ({
-				id,
-				...(spaceId ? { spaceId } : {}),
-				name: path ? basename(path) : "Open repository",
-				workspace: {
-					...RepositoryWorkspaceModel.create(),
-					repositoryPath: path,
-					loading: path !== null,
-					commitMessage: draft,
-					...(navigation ? WorkspaceSession.restoreNavigation(navigation) : {}),
-				},
-			})),
-			activeId: document.activeId,
+			tabs,
+			activeId,
 			nextId: document.tabs.reduce(
 				(next, tab) =>
 					Math.max(next, Number(tab.id.slice("workspace-".length)) + 1),

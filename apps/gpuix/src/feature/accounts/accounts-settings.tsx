@@ -1,26 +1,29 @@
-import { IgnoredHistorySettings } from "../ignored-history/ignored-history-settings";
+import {
+	IgnoredHistorySettings,
+	type IgnoredHistorySettingsHandle,
+} from "../ignored-history/ignored-history-settings";
 import type {
 	IgnoredHistory,
 	IgnoredRepository,
 } from "../ignored-history/ignored-history";
 import type { IgnoredHistoryStatus } from "../ignored-history/use-ignored-histories";
 import { createThemedStyles, useAppTheme } from "../../styles/theme";
-import { typography, spacing, fontWeight } from "@1git/design-tokens";
+import { spacing } from "@1git/design-tokens";
 import {
+	cloneElement,
 	useCallback,
 	useEffect,
 	useRef,
 	useState,
 	type ReactNode,
+	type ReactElement,
+	type ComponentProps,
+	type Ref,
 } from "react";
 import { useGpuixRequired, type PublicInstance } from "@gpuix/react";
+import { Scrollbars } from "@1git/gpuix-ui/scrollbar";
 import { Button } from "@1git/gpuix-ui/button";
 import { Popover, PopoverContent } from "@1git/gpuix-ui/popover";
-import { AppShell } from "../../fixture/app-shell";
-import {
-	WorkspaceRail,
-	workspaceRailWidth,
-} from "../repository-workspace/components/workspace-rail";
 import { settingsNavigation } from "./lib/settings-shortcut";
 import {
 	AccountConnectionFields,
@@ -28,18 +31,14 @@ import {
 } from "./account-connection-form";
 import { useAccountConnection } from "./use-account-connection";
 import { accountSetup } from "./lib/account-setup";
-import { AccountList, accountActionIcons } from "./account-list";
+import { AccountList } from "./account-list";
 import { NativeBrowser } from "../../platform/browser";
 import { Accounts } from "./lib/accounts";
 import type { RemoteAccounts } from "./lib/remote-accounts";
 import { AccountStore, type SavedAccount } from "./lib/account-store";
 import { NativeCredentials } from "./lib/native-credentials";
 
-import { workspaceLayout } from "../../styles/workspace-layout";
 import { WorkspaceTabIcon } from "../workspace-tabs/components/workspace-tab-icon";
-import { WorkspaceTabHeading } from "../workspace-tabs/components/workspace-tab";
-import type { RepositoryView } from "../repository-workspace/types";
-import type { SpaceDirection } from "../spaces/workspace-spaces";
 import { NativeClipboard } from "../../platform/clipboard";
 import {
 	GitSettings,
@@ -52,71 +51,87 @@ import {
 	type EditorSettingsHandle,
 } from "../editor-settings/editor-settings";
 import type { ExternalEditors } from "../editor-settings/external-editors";
+import {
+	SettingsPage,
+	SettingsSection as SettingsLayoutSection,
+	SettingsSplit,
+	settingsStyles,
+} from "../settings/settings-layout";
+import type { SpacesSettingsHandle } from "../spaces/space-manager";
 import { AppearanceSettings } from "../appearance-settings/appearance-settings";
 import { PrivacySettings } from "../analytics/privacy-settings";
+import { KeybindSettings } from "../keybinds/keybind-settings";
+import {
+	ApplicationSettings,
+	type ApplicationLauncherIntent,
+} from "../settings/application-settings";
 import { AiSettings, type AiSettingsHandle } from "../ai/ai-settings";
 import { RepositoryAppearance } from "../repository-appearance/repository-appearance";
 import type { RepositoryAppearanceValue } from "../repository-appearance/repository-patterns";
+import {
+	settingsPagesMetadata,
+	type SettingsSection,
+} from "../settings/settings-metadata";
+
+export type { SettingsSection } from "../settings/settings-metadata";
 
 const sidebarWidth = 200;
-const contentPadding = spacing[4];
-const sectionMaxWidth = 480;
 
-// Clear the traffic lights and keep the tab, including its curved shoulder, over the sidebar.
-const titleInset = workspaceLayout.desktopTitlebarControlsWidth;
+interface SettingsNavItem {
+	section: SettingsSection;
+	label: string;
+	icon: ComponentProps<typeof WorkspaceTabIcon>["name"];
+	group: "application" | "repository";
+}
+export const settingsPages =
+	settingsPagesMetadata satisfies readonly SettingsNavItem[];
 
-const settingsTitleWidth =
-	workspaceRailWidth + sidebarWidth - titleInset - spacing[4];
+function SettingsNavButton({
+	item,
+	active,
+	disabled,
+	onSelect,
+	ref,
+}: {
+	item: SettingsNavItem;
+	active: boolean;
+	disabled: boolean;
+	onSelect: (section: SettingsSection) => void;
+	ref?: Ref<PublicInstance>;
+}) {
+	const { tokens } = useAppTheme();
 
-/** Settings pages distinguish application defaults from the active repository's configuration. */
-export type SettingsSection =
-	| "accounts"
-	| "spaces"
-	| "appearance"
-	| "privacy"
-	| "ai"
-	| "git"
-	| "editor"
-	| "repository-remotes"
-	| "repository-ignored-history"
-	| "repository-appearance"
-	| "repository-identity";
-
-const themedStyles = createThemedStyles(({ tokens: appTokens }) => {
-	const labelStyle = { ...typography.md, color: appTokens.colors.textMuted };
-
-	const headingStyle = {
-		...typography.lg,
-		fontWeight: fontWeight.medium,
-		color: appTokens.colors.text,
-	};
-
-	const footerStyle = {
-		display: "flex",
-		flexDirection: "column",
-		flexShrink: 0,
-		gap: spacing[2],
-		paddingTop: spacing[3],
-		paddingBottom: spacing[3],
-		paddingLeft: contentPadding,
-		paddingRight: contentPadding,
-		borderTopWidth: 1,
-		borderColor: appTokens.colors.border,
-	};
-
-	const groupHeading = {
-		...typography.xs,
-		fontWeight: fontWeight.medium,
-		color: appTokens.colors.textMuted,
+	return (
+		<Button
+			testId={`settings-${item.section}`}
+			ref={ref}
+			tokens={tokens}
+			size="sm"
+			variant={active ? "secondary" : "ghost"}
+			aria-current={active ? "page" : undefined}
+			disabled={disabled}
+			style={{ justifyContent: "flex-start" }}
+			onPress={() => onSelect(item.section)}
+		>
+			<WorkspaceTabIcon
+				name={item.icon}
+				testId={`settings-${item.section}-icon`}
+			/>
+			{item.label}
+		</Button>
+	);
+}
+const themedStyles = createThemedStyles((theme) => ({
+	groupHeading: {
+		...settingsStyles.get(theme).navGroup,
 		paddingLeft: spacing[2.5],
 		marginTop: spacing[3],
-	};
-
-	return { labelStyle, headingStyle, footerStyle, groupHeading };
-});
+	},
+}));
 
 /** Account settings are window-local. Tokens are transient refs and uncontrolled native password inputs, never renderer props. */
 export function AccountsSettings({
+	active = true,
 	onBack,
 	onReplayTips,
 	onSetup,
@@ -125,25 +140,30 @@ export function AccountsSettings({
 	children,
 	initialForm = "list",
 	initialReconnectKey,
+	onFormChange,
+	onBusyChange,
 	openLink = NativeBrowser.open,
 	copyText = NativeClipboard.write,
-	preferredAccountKey,
-	onAccount,
-	repositoryView,
-	onRepositoryView,
 	initialSection = "accounts",
+	onSectionChange,
 	repositorySettings,
 	repositoryAppearance,
 	repositoryAppearanceName,
 	onCustomizeRepositoryAppearance,
+	onChangeRepositoryAppearance,
 	ignoredHistory,
-	spaceSwitcher,
-	onSpaceSwipe,
 	spacesSettings,
 	readGitSettings = GitSettingsModel.read,
 	writeGitSettings = GitSettingsModel.write,
+	autoIncludeChanges = false,
+	onAutoIncludeChanges,
 	externalEditors,
+	applicationSettings,
+	applicationSettingsIntent,
+	onApplicationSettingsIntentConsumed,
 }: {
+	/** Background Settings tabs retain drafts and requests without owning keyboard input. */
+	active?: boolean;
 	onBack: () => void;
 	onReplayTips?: () => void;
 	onSetup?: () => void;
@@ -152,18 +172,16 @@ export function AccountsSettings({
 	children?: ReactNode;
 	/** Clone's Add account entry opens setup immediately; normal Settings starts with the list. */
 	initialForm?: "list" | "connect";
+	onFormChange?: (form: "list" | "connect") => void;
+	onBusyChange?: (busy: boolean) => void;
 	/** A user-requested recovery opens this account's existing reconnect form, without authorizing it. */
 	initialReconnectKey?: string;
 	/** System-browser boundary; native tests capture setup links without opening a real account. */
 	openLink?: (url: string) => Promise<void>;
 	/** Public setup values only; tests capture writes without replacing the user's clipboard. */
 	copyText?: (value: string) => Promise<void>;
-	preferredAccountKey?: string;
-	onAccount?: (key: string) => void;
-	/** Keep the active repository's rail available while Settings covers its workspace. */
-	repositoryView?: RepositoryView;
-	onRepositoryView?: (view: RepositoryView) => void;
 	initialSection?: SettingsSection;
+	onSectionChange?: (section: SettingsSection) => void;
 	repositorySettings?: { root: string; name: string; disabled: boolean };
 	ignoredHistory?: {
 		history: IgnoredHistory;
@@ -175,19 +193,23 @@ export function AccountsSettings({
 	};
 	repositoryAppearance?: RepositoryAppearanceValue;
 	repositoryAppearanceName?: string;
-	onCustomizeRepositoryAppearance?: () => void;
-	spaceSwitcher?: (disabled: boolean) => ReactNode;
-	onSpaceSwipe?: (direction: SpaceDirection) => void;
-	spacesSettings?: ReactNode;
+	onCustomizeRepositoryAppearance?: (value: RepositoryAppearanceValue) => void;
+	onChangeRepositoryAppearance?: (value: RepositoryAppearanceValue) => void;
+	spacesSettings?: ReactElement<{ ref?: Ref<SpacesSettingsHandle> }>;
 	readGitSettings?: typeof GitSettingsModel.read;
 	writeGitSettings?: typeof GitSettingsModel.write;
+	autoIncludeChanges?: boolean;
+	onAutoIncludeChanges?: (enabled: boolean) => void;
 	externalEditors?: ExternalEditors;
+	applicationSettings?: ReactElement;
+	applicationSettingsIntent?: ApplicationLauncherIntent;
+	onApplicationSettingsIntentConsumed?: () => void;
 }) {
 	const theme = useAppTheme();
 	const { tokens: appTokens } = theme;
 
-	const { labelStyle, headingStyle, footerStyle, groupHeading } =
-		themedStyles.get(theme);
+	const { groupHeading } = themedStyles.get(theme);
+	const styles = settingsStyles.get(theme);
 
 	const renderer = useGpuixRequired();
 
@@ -224,6 +246,10 @@ export function AccountsSettings({
 		cancelConnection,
 	} = connection;
 
+	useEffect(() => {
+		onFormChange?.(form);
+	}, [form, onFormChange]);
+
 	const readAccountIdentity = useCallback(
 		(account: SavedAccount, signal: AbortSignal) =>
 			accounts.commitIdentity(account, signal),
@@ -237,12 +263,31 @@ export function AccountsSettings({
 	}, [accounts, initialForm, initialReconnectKey]);
 
 	const [section, setSection] = useState(initialSection);
+
+	const changeSection = (next: SettingsSection): void => {
+		setSection(next);
+		onSectionChange?.(next);
+	};
+
+	useEffect(() => {
+		setSection(initialSection);
+	}, [initialSection]);
+
 	const [gitBusy, setGitBusy] = useState(false);
+	const [applicationBusy, setApplicationBusy] = useState(false);
 	const gitBusyRef = useRef(false);
+	const spacesEditor = useRef<SpacesSettingsHandle | null>(null);
+	const ignoredSettings = useRef<IgnoredHistorySettingsHandle | null>(null);
 	const gitSettings = useRef<GitSettingsHandle | null>(null);
 	const editorSettings = useRef<EditorSettingsHandle | null>(null);
 	const aiSettings = useRef<AiSettingsHandle | null>(null);
-	const settingsBusy = busy || gitBusy;
+	const settingsBusy = busy || gitBusy || applicationBusy;
+
+	useEffect(() => {
+		onBusyChange?.(settingsBusy);
+
+		return () => onBusyChange?.(false);
+	}, [onBusyChange, settingsBusy]);
 
 	const repositorySection =
 		section === "repository-remotes" ||
@@ -251,27 +296,40 @@ export function AccountsSettings({
 		section === "repository-ignored-history";
 
 	const mounted = useRef(true);
-	const view = useRef<PublicInstance | null>(null);
 	const initialPage = useRef<PublicInstance | null>(null);
+	const navigation = useRef<PublicInstance>(null);
 	const addButton = useRef<PublicInstance | null>(null);
 
 	useEffect(() => {
 		mounted.current = true;
+
+		return () => {
+			mounted.current = false;
+		};
+	}, []);
+
+	useEffect(() => {
+		if (!active) return;
+
 		const focus = setTimeout(() => {
 			if (initialPage.current) renderer.focusElement?.(initialPage.current.id);
 		}, 0);
 
 		return () => {
 			clearTimeout(focus);
-			mounted.current = false;
 		};
-	}, [renderer]);
+	}, [active, renderer]);
 
 	useEffect(() => {
+		if (!active) return;
+
 		settingsNavigation.set(renderer, {
-			scope: () => view.current?.id ?? null,
 			back: () => {
 				if (gitBusyRef.current) return;
+
+				if (spacesEditor.current?.cancelEditor()) return;
+
+				if (ignoredSettings.current?.cancelEditor()) return;
 
 				if (gitSettings.current?.cancelEditor()) return;
 
@@ -286,697 +344,403 @@ export function AccountsSettings({
 		return () => {
 			settingsNavigation.delete(renderer);
 		};
-	}, [renderer, onBack, cancelConnection]);
+	}, [active, renderer, onBack, cancelConnection]);
 
 	const removingHost = removing ? new URL(removing.webUrl) : undefined;
 
-	return (
-		<AppShell
-			testId="settings-view"
-			ref={view}
-			workspaceLabel="Settings"
-			rail={
-				<WorkspaceRail
-					ignoredHistory={
-						ignoredHistory?.status?.data?.preferences.enabled &&
-						ignoredHistory.onOpen
-							? {
-									active: ignoredHistory.active ?? false,
-									onOpen: () => {
-										if (!settingsBusy) ignoredHistory.onOpen?.();
-									},
-								}
-							: undefined
-					}
-					spaceSwitcher={spaceSwitcher}
-					onSpaceSwipe={onSpaceSwipe}
-					accounts={accounts}
-					savedAccounts={saved}
-					preferredAccountKey={preferredAccountKey}
-					onAccount={onAccount}
-					settingsActive
-					disabled={settingsBusy}
-					view={repositoryView}
-					onView={(next) => {
-						if (!connection.isPending() && !gitBusyRef.current)
-							onRepositoryView?.(next);
-					}}
-					onSettings={() => {
-						if (settingsBusy) return;
+	const availablePages = settingsPages.filter((item) => {
+		switch (item.section) {
+			case "spaces":
+				return !!spacesSettings;
+			case "repository-remotes":
+			case "repository-identity":
+				return !!repositorySettings;
+			case "repository-appearance":
+				return !!repositoryAppearance;
+			case "repository-ignored-history":
+				return !!ignoredHistory;
+			default:
+				return true;
+		}
+	});
 
-						clearToken();
-						setError(undefined);
-						setForm("list");
-						setSection("accounts");
-					}}
-					onAddAccount={() => {
-						if (!settingsBusy) {
-							setSection("accounts");
-							startConnection();
+	return (
+		<div
+			testId="settings-view"
+			aria-hidden={!active || undefined}
+			style={{
+				display: "flex",
+				flexDirection: "row",
+				flexGrow: 1,
+				minWidth: 0,
+				minHeight: 0,
+				width: "100%",
+				height: "100%",
+				backgroundColor: "transparent",
+				...(!active
+					? {
+							position: "absolute",
+							top: 0,
+							left: 0,
+							visibility: "hidden",
+							pointerEvents: "none",
 						}
-					}}
-				/>
-			}
-			toolbar={
-				<div
-					testId="settings-toolbar"
-					windowDrag
-					style={{
-						display: "flex",
-						flexDirection: "row",
-						height: workspaceLayout.toolbarHeight,
-						flexShrink: 0,
-						alignItems: "end",
-						paddingLeft: titleInset,
-					}}
-				>
-					<WorkspaceTabHeading
-						label="Settings"
-						testId="settings-title-tab"
-						width={settingsTitleWidth}
-						onClose={onBack}
-						disabled={settingsBusy}
-					/>
-				</div>
-			}
-			navigation={
-				<div
-					testId="settings-navigation"
-					style={{
-						display: "flex",
-						flexDirection: "column",
-						width: sidebarWidth,
-						flexShrink: 0,
-						padding: spacing[2],
-						gap: spacing[1.5],
-						borderRightWidth: 1,
-						borderColor: appTokens.colors.border,
-					}}
-				>
-					<text
-						testId="settings-application-group"
-						role="heading"
-						aria-level={2}
-						style={groupHeading}
-					>
-						Application
-					</text>
-					{spacesSettings ? (
-						<Button
-							testId="settings-spaces"
-							ref={section === "spaces" ? initialPage : undefined}
-							tokens={appTokens}
-							size="sm"
-							variant={section === "spaces" ? "secondary" : "ghost"}
-							aria-current={section === "spaces" ? "page" : undefined}
-							disabled={settingsBusy}
-							style={{ justifyContent: "flex-start" }}
-							onPress={() => {
-								clearToken();
-								setForm("list");
-								setSection("spaces");
-							}}
-						>
-							<WorkspaceTabIcon name="layers" testId="settings-spaces-icon" />
-							Spaces
-						</Button>
-					) : null}
-					<Button
-						testId="settings-appearance"
-						ref={section === "appearance" ? initialPage : undefined}
-						tokens={appTokens}
-						size="sm"
-						variant={section === "appearance" ? "secondary" : "ghost"}
-						aria-current={section === "appearance" ? "page" : undefined}
-						disabled={settingsBusy}
-						style={{ justifyContent: "flex-start" }}
-						onPress={() => {
-							clearToken();
-							setForm("list");
-							setSection("appearance");
-						}}
-					>
-						<svg
-							source='<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.25"><circle cx="12" cy="12" r="8"/><path d="M12 4v16M12 4a8 8 0 0 1 0 16Z" fill="currentColor" stroke="none"/></svg>'
-							style={{
-								width: 14,
-								height: 14,
-								color: appTokens.colors.textMuted,
-								pointerEvents: "none",
-							}}
-						/>
-						Appearance
-					</Button>
-					<Button
-						testId="settings-privacy"
-						ref={section === "privacy" ? initialPage : undefined}
-						tokens={appTokens}
-						size="sm"
-						variant={section === "privacy" ? "secondary" : "ghost"}
-						aria-current={section === "privacy" ? "page" : undefined}
-						disabled={settingsBusy}
-						style={{ justifyContent: "flex-start" }}
-						onPress={() => {
-							clearToken();
-							setForm("list");
-							setSection("privacy");
-						}}
-					>
-						<WorkspaceTabIcon name="shield" testId="settings-privacy-icon" />
-						Privacy
-					</Button>
-					<Button
-						testId="settings-accounts"
-						ref={section === "accounts" ? initialPage : undefined}
-						tokens={appTokens}
-						size="sm"
-						variant={section === "accounts" ? "secondary" : "ghost"}
-						aria-current={section === "accounts" ? "page" : undefined}
-						disabled={settingsBusy}
-						onPress={() => {
-							clearToken();
-							setSection("accounts");
-							setForm("list");
-						}}
-						style={{ justifyContent: "flex-start" }}
-					>
-						<WorkspaceTabIcon
-							name="userCircle"
-							testId="settings-accounts-icon"
-						/>
-						Accounts
-					</Button>
-					<Button
-						testId="settings-git"
-						ref={section === "git" ? initialPage : undefined}
-						tokens={appTokens}
-						size="sm"
-						variant={section === "git" ? "secondary" : "ghost"}
-						aria-current={section === "git" ? "page" : undefined}
-						disabled={settingsBusy}
-						style={{ justifyContent: "flex-start" }}
-						onPress={() => {
-							clearToken();
-							setForm("list");
-							setSection("git");
-						}}
-					>
-						<WorkspaceTabIcon name="branch" />
-						Commit identity
-					</Button>
-					<Button
-						testId="settings-editor"
-						ref={section === "editor" ? initialPage : undefined}
-						tokens={appTokens}
-						size="sm"
-						variant={section === "editor" ? "secondary" : "ghost"}
-						aria-current={section === "editor" ? "page" : undefined}
-						disabled={settingsBusy}
-						style={{ justifyContent: "flex-start" }}
-						onPress={() => {
-							clearToken();
-							setForm("list");
-							setSection("editor");
-						}}
-					>
-						<svg
-							source={accountActionIcons.reconnect}
-							style={{
-								width: 14,
-								height: 14,
-								color: appTokens.colors.textMuted,
-								pointerEvents: "none",
-							}}
-						/>
-						External editor
-					</Button>
-					<Button
-						testId="settings-ai"
-						ref={section === "ai" ? initialPage : undefined}
-						tokens={appTokens}
-						size="sm"
-						variant={section === "ai" ? "secondary" : "ghost"}
-						aria-current={section === "ai" ? "page" : undefined}
-						disabled={settingsBusy}
-						style={{ justifyContent: "flex-start" }}
-						onPress={() => {
-							clearToken();
-							setForm("list");
-							setSection("ai");
-						}}
-					>
-						<WorkspaceTabIcon name="sparkle" />
-						AI
-					</Button>
-					{onSetup ? (
-						<Button
-							testId="settings-run-setup"
-							tokens={appTokens}
-							size="sm"
-							variant="ghost"
-							disabled={settingsBusy}
-							style={{ justifyContent: "flex-start", marginTop: spacing[3] }}
-							onPress={onSetup}
-						>
-							<WorkspaceTabIcon name="home" />
-							Run setup again
-						</Button>
-					) : null}
-					{repositorySettings || repositoryAppearance ? (
-						<>
-							<text
-								testId="settings-repository-group"
-								role="heading"
-								aria-level={2}
-								style={{ ...groupHeading, marginTop: spacing[5] }}
-							>
-								Repository
-							</text>
-							{(
-								[
-									...(repositorySettings
-										? [["repository-remotes", "Remotes", "branch"] as const]
-										: []),
-									...(repositoryAppearance
-										? [
-												[
-													"repository-appearance",
-													"Appearance",
-													"sparkle",
-												] as const,
-											]
-										: []),
-									...(repositorySettings
-										? [
-												[
-													"repository-identity",
-													"Commit identity",
-													"userCircle",
-												] as const,
-											]
-										: []),
-									...(ignoredHistory
-										? [
-												[
-													"repository-ignored-history",
-													"Ignored file history",
-													"check",
-												] as const,
-											]
-										: []),
-								] as const
-							).map(([next, label, icon]) => (
-								<Button
-									key={next}
-									ref={section === next ? initialPage : undefined}
-									testId={`settings-${next}`}
-									tokens={appTokens}
-									size="sm"
-									variant={section === next ? "secondary" : "ghost"}
-									aria-current={section === next ? "page" : undefined}
-									disabled={settingsBusy}
-									style={{ justifyContent: "flex-start" }}
-									onPress={() => {
-										clearToken();
-										setForm("list");
-										setSection(next);
-									}}
-								>
-									<WorkspaceTabIcon name={icon} />
-									{label}
-								</Button>
-							))}
-						</>
-					) : null}
-				</div>
-			}
+					: {}),
+			}}
 		>
-			{children}
-			{section === "spaces" ? (
-				spacesSettings
-			) : section === "appearance" ? (
-				<>
-					<AppearanceSettings />
-					{onReplayTips ? (
-						<Button
-							testId="settings-replay-tips"
-							tokens={appTokens}
-							variant="secondary"
-							onPress={onReplayTips}
-							style={{ alignSelf: "start", margin: spacing[4] }}
-						>
-							Show tips again
-						</Button>
-					) : null}
-				</>
-			) : section === "privacy" ? (
-				<PrivacySettings />
-			) : section === "ai" ? (
-				<AiSettings
-					ref={aiSettings}
-					openLink={openLink}
-					onBusy={(next) => {
-						gitBusyRef.current = next;
-						setGitBusy(next);
-					}}
-				/>
-			) : section === "editor" ? (
-				<EditorSettings
-					ref={editorSettings}
-					editors={externalEditors}
-					onBusy={(next) => {
-						gitBusyRef.current = next;
-						setGitBusy(next);
-					}}
-				/>
-			) : repositorySection &&
-			  !repositorySettings &&
-			  !(section === "repository-appearance" && repositoryAppearance) ? (
-				<StateMessage
-					artwork="repository"
-					title="Open a repository to edit its settings"
-				/>
-			) : section === "repository-ignored-history" && ignoredHistory ? (
-				<IgnoredHistorySettings
-					key={ignoredHistory.repository.root}
-					{...ignoredHistory}
-					disabled={repositorySettings?.disabled}
-					onBusy={(next) => {
-						gitBusyRef.current = next;
-						setGitBusy(next);
-					}}
-				/>
-			) : section === "repository-appearance" && repositoryAppearance ? (
-				<RepositoryAppearance
-					key={repositorySettings?.root ?? repositoryAppearanceName}
-					{...repositoryAppearance}
-					name={
-						repositoryAppearanceName ?? repositorySettings?.name ?? "Repository"
-					}
-					onCustomize={onCustomizeRepositoryAppearance}
-				/>
-			) : section !== "accounts" ? (
-				<GitSettings
-					ref={gitSettings}
-					key={section}
-					page={section === "repository-remotes" ? "remotes" : "identity"}
-					root={repositorySection ? (repositorySettings?.root ?? null) : null}
-					disabled={repositorySection && repositorySettings?.disabled}
-					read={readGitSettings}
-					write={writeGitSettings}
-					accounts={saved}
-					remoteAccounts={remoteAccounts}
-					readAccountIdentity={readAccountIdentity}
-					onBusy={(next) => {
-						gitBusyRef.current = next;
-						setGitBusy(next);
-					}}
-				/>
-			) : (
-				<>
-					<div
-						testId="accounts-settings"
-						style={{
-							display: "flex",
-							flexDirection: "row",
-							flexGrow: 1,
-							minHeight: 0,
-							minWidth: 0,
-						}}
-					>
+			<div
+				ref={navigation}
+				testId="settings-navigation"
+				style={{
+					display: "flex",
+					flexDirection: "column",
+					minHeight: 0,
+					overflowY: "scroll",
+					width: sidebarWidth,
+					flexShrink: 0,
+					padding: spacing[2],
+					gap: spacing[1.5],
+					borderRightWidth: 1,
+					borderColor: appTokens.colors.border,
+				}}
+			>
+				{(["application", "repository"] as const).map((group) => {
+					const pages = availablePages.filter((item) => item.group === group);
+
+					return pages.length ? (
 						<div
-							testId="accounts-list-panel"
+							key={group}
 							style={{
 								display: "flex",
 								flexDirection: "column",
-								width: form === "connect" ? "50%" : "100%",
-								flexGrow: form === "connect" ? 0 : 1,
+								gap: spacing[1.5],
 								flexShrink: 0,
-								minHeight: 0,
 							}}
 						>
-							<div
+							<text
+								testId={`settings-${group}-group`}
+								role="heading"
+								aria-level={2}
 								style={{
-									display: "flex",
-									flexDirection: "column",
-									gap: spacing[1],
-									width: "100%",
-									maxWidth: sectionMaxWidth + contentPadding * 2,
-									padding: contentPadding,
-									flexShrink: 0,
+									...groupHeading,
+									marginTop: group === "repository" ? spacing[5] : spacing[3],
 								}}
 							>
-								<div
-									testId="accounts-list-header"
-									style={{
-										display: "flex",
-										flexDirection: "row",
-										alignItems: "center",
-										justifyContent: "space-between",
-										gap: spacing[3],
+								{group === "application" ? "Application" : "Repository"}
+							</text>
+							{pages.map((item) => (
+								<SettingsNavButton
+									key={item.section}
+									item={item}
+									ref={section === item.section ? initialPage : undefined}
+									active={section === item.section}
+									disabled={settingsBusy}
+									onSelect={(next) => {
+										clearToken();
+										setForm("list");
+										changeSection(next);
 									}}
-								>
-									<text
-										testId="accounts-heading"
-										role="heading"
-										aria-level={1}
-										style={headingStyle}
-									>
-										Accounts
-									</text>
-									<Button
-										testId="account-add"
-										ref={addButton}
-										size="sm"
-										tokens={appTokens}
-										disabled={busy || form === "connect"}
-										onPress={() => startConnection()}
-									>
-										Add account
-									</Button>
-								</div>
-								<text testId="accounts-description" style={labelStyle}>
-									Connected hosting accounts.
-								</text>
-								{error && form === "list" && !removing ? (
-									<text
-										role="alert"
-										testId="accounts-error"
-										style={{ ...labelStyle, color: appTokens.colors.danger }}
-									>
-										{error}
-									</text>
-								) : null}
-							</div>
-							<div
-								testId="accounts-list-scroll"
-								style={{
-									display: "flex",
-									flexDirection: "column",
-									flexGrow: 1,
-									minHeight: 0,
-									overflowY: "scroll",
-									paddingLeft: contentPadding,
-									paddingRight: contentPadding,
-									paddingBottom: contentPadding,
-								}}
-							>
-								<div
-									testId="accounts-list-content"
-									style={{
-										display: "flex",
-										flexDirection: "column",
-										width: "100%",
-										maxWidth: sectionMaxWidth,
-										flexGrow: 1,
-										flexShrink: 0,
-									}}
-								>
-									<AccountList
-										accounts={saved}
-										status={status}
-										disabled={busy || form === "connect"}
-										onReconnect={startConnection}
-										onCheck={(account) => {
-											void perform(async (signal) => {
-												const message = await accounts.check(account, signal);
-
-												if (mounted.current)
-													setStatus((previous) => ({
-														...previous,
-														[AccountStore.key(account)]: message,
-													}));
-											});
-										}}
-										onRemove={(account) => {
-											setError(undefined);
-											setRemoving(account);
-										}}
-									/>
-								</div>
-							</div>
+								/>
+							))}
 						</div>
-						{form === "connect" ? (
-							<div
-								testId="account-setup-panel"
-								role="region"
-								aria-label={replacing ? "Reconnect account" : "Add account"}
-								style={{
-									display: "flex",
-									flexDirection: "column",
-									flexGrow: 1,
-									flexBasis: 0,
-									minWidth: 0,
-									minHeight: 0,
-									borderLeftWidth: 1,
-									borderColor: appTokens.colors.border,
-								}}
+					) : null;
+				})}
+			</div>
+			<Scrollbars
+				vertical={navigation}
+				tokens={appTokens}
+				testId="settings-navigation-scrollbar"
+			/>
+			<div
+				style={{
+					display: "flex",
+					flexDirection: "column",
+					flexGrow: 1,
+					minWidth: 0,
+					minHeight: 0,
+					overflow: "hidden",
+				}}
+			>
+				{children}
+				{section === "application" ? (
+					(applicationSettings ?? (
+						<ApplicationSettings
+							intent={applicationSettingsIntent}
+							onIntentConsumed={onApplicationSettingsIntentConsumed}
+							onBusyChange={setApplicationBusy}
+						/>
+					))
+				) : section === "spaces" ? (
+					spacesSettings ? (
+						cloneElement(spacesSettings, { ref: spacesEditor })
+					) : null
+				) : section === "appearance" ? (
+					<AppearanceSettings
+						onReplayTips={onReplayTips}
+						onSetup={onSetup}
+						busy={settingsBusy}
+					/>
+				) : section === "keybinds" ? (
+					<KeybindSettings />
+				) : section === "privacy" ? (
+					<PrivacySettings />
+				) : section === "ai" ? (
+					<AiSettings
+						ref={aiSettings}
+						openLink={openLink}
+						onBusy={(next) => {
+							gitBusyRef.current = next;
+							setGitBusy(next);
+						}}
+					/>
+				) : section === "editor" ? (
+					<EditorSettings
+						ref={editorSettings}
+						active={active}
+						editors={externalEditors}
+						onBusy={(next) => {
+							gitBusyRef.current = next;
+							setGitBusy(next);
+						}}
+					/>
+				) : repositorySection &&
+				  !repositorySettings &&
+				  !(section === "repository-appearance" && repositoryAppearance) ? (
+					<StateMessage
+						artwork="repository"
+						title="Open a repository to edit its settings"
+					/>
+				) : section === "repository-ignored-history" && ignoredHistory ? (
+					<IgnoredHistorySettings
+						ref={ignoredSettings}
+						key={ignoredHistory.repository.root}
+						{...ignoredHistory}
+						active={active}
+						disabled={repositorySettings?.disabled}
+						onBusy={(next) => {
+							gitBusyRef.current = next;
+							setGitBusy(next);
+						}}
+					/>
+				) : section === "repository-appearance" && repositoryAppearance ? (
+					<RepositoryAppearance
+						key={repositorySettings?.root ?? repositoryAppearanceName}
+						{...repositoryAppearance}
+						name={
+							repositoryAppearanceName ??
+							repositorySettings?.name ??
+							"Repository"
+						}
+						onCustomize={onCustomizeRepositoryAppearance}
+						onChange={onChangeRepositoryAppearance}
+					/>
+				) : section !== "accounts" ? (
+					<GitSettings
+						ref={gitSettings}
+						active={active}
+						key={section}
+						page={section === "repository-remotes" ? "remotes" : "identity"}
+						root={repositorySection ? (repositorySettings?.root ?? null) : null}
+						disabled={repositorySection && repositorySettings?.disabled}
+						read={readGitSettings}
+						write={writeGitSettings}
+						autoIncludeChanges={autoIncludeChanges}
+						onAutoIncludeChanges={onAutoIncludeChanges}
+						accounts={saved}
+						remoteAccounts={remoteAccounts}
+						readAccountIdentity={readAccountIdentity}
+						onBusy={(next) => {
+							gitBusyRef.current = next;
+							setGitBusy(next);
+						}}
+					/>
+				) : (
+					<>
+						<SettingsSplit
+							testId="accounts-settings"
+							list={
+								<SettingsPage
+									testId="accounts-list-panel"
+									scrollTestId="accounts-list-scroll"
+									headerTestId="accounts-list-header"
+									title="Accounts"
+									titleTestId="accounts-heading"
+									description="Connected hosting accounts."
+									descriptionTestId="accounts-description"
+									action={
+										<Button
+											variant="secondary"
+											testId="account-add"
+											ref={addButton}
+											size="sm"
+											tokens={appTokens}
+											disabled={busy || form === "connect"}
+											onPress={() => startConnection()}
+										>
+											Add account
+										</Button>
+									}
+								>
+									<SettingsLayoutSection testId="accounts-list-content">
+										{error && form === "list" && !removing ? (
+											<text
+												role="alert"
+												testId="accounts-error"
+												style={{ ...styles.error }}
+											>
+												{error}
+											</text>
+										) : null}
+										<AccountList
+											accounts={saved}
+											status={status}
+											disabled={busy || form === "connect"}
+											onReconnect={startConnection}
+											onCheck={(account) => {
+												void perform(async (signal) => {
+													const message = await accounts.check(account, signal);
+
+													if (mounted.current)
+														setStatus((previous) => ({
+															...previous,
+															[AccountStore.key(account)]: message,
+														}));
+												});
+											}}
+											onRemove={(account) => {
+												setError(undefined);
+												setRemoving(account);
+											}}
+										/>
+									</SettingsLayoutSection>
+								</SettingsPage>
+							}
+							panel={
+								form === "connect"
+									? {
+											testId: "account-setup-panel",
+											titleTestId: "account-setup-heading",
+											title: replacing ? "Reconnect account" : "Add account",
+											label: replacing ? "Reconnect account" : "Add account",
+											description: "Git credentials stay separate.",
+											scrollTestId: "account-setup-scroll",
+											footerTestId: "account-setup-footer",
+											body: (
+												<AccountConnectionFields
+													connection={connection}
+													copyText={copyText}
+												/>
+											),
+											footer: (
+												<AccountConnectionActions connection={connection} />
+											),
+										}
+									: undefined
+							}
+						/>
+						<Popover
+							open={active && removing !== undefined}
+							onOpenChange={(open) => {
+								if (!open && !busy) {
+									setRemoving(undefined);
+									setError(undefined);
+								}
+							}}
+							modal
+						>
+							<PopoverContent
+								testId="account-remove-dialog"
+								aria-label="Confirm account removal"
+								placement="center"
+								width={340}
+								dismissible={!busy}
+								tokens={appTokens}
 							>
 								<div
 									style={{
 										display: "flex",
 										flexDirection: "column",
-										gap: spacing[1],
-										width: "100%",
-										maxWidth: sectionMaxWidth + contentPadding * 2,
-										padding: contentPadding,
-										flexShrink: 0,
+										gap: spacing[2.5],
+										padding: spacing[1],
 									}}
 								>
 									<text
-										testId="account-setup-heading"
 										role="heading"
 										aria-level={2}
-										style={headingStyle}
+										style={styles.sectionTitle}
 									>
-										{replacing ? "Reconnect account" : "Add account"}
+										Remove account?
 									</text>
-									<text style={labelStyle}>Git credentials stay separate.</text>
-								</div>
-								<div
-									testId="account-setup-scroll"
-									style={{
-										flexGrow: 1,
-										minHeight: 0,
-										minWidth: 0,
-										overflowY: "scroll",
-										paddingLeft: contentPadding,
-										paddingRight: contentPadding,
-										paddingBottom: contentPadding,
-									}}
-								>
-									<AccountConnectionFields
-										connection={connection}
-										copyText={copyText}
-									/>
-								</div>
-								<div testId="account-setup-footer" style={footerStyle}>
-									<AccountConnectionActions connection={connection} />
-								</div>
-							</div>
-						) : null}
-					</div>
-					<Popover
-						open={removing !== undefined}
-						onOpenChange={(open) => {
-							if (!open && !busy) {
-								setRemoving(undefined);
-								setError(undefined);
-							}
-						}}
-						modal
-					>
-						<PopoverContent
-							testId="account-remove-dialog"
-							aria-label="Confirm account removal"
-							placement="center"
-							width={340}
-							dismissible={!busy}
-							tokens={appTokens}
-						>
-							<div
-								style={{
-									display: "flex",
-									flexDirection: "column",
-									gap: spacing[2.5],
-									padding: spacing[1],
-								}}
-							>
-								<text role="heading" aria-level={2} style={headingStyle}>
-									Remove account?
-								</text>
-								{removing && removingHost ? (
-									<text
-										style={{ ...typography.md, color: appTokens.colors.text }}
-									>
-										{`${removing.username} · ${accountSetup[removing.provider].name} · ${removingHost.host}${removingHost.pathname === "/" ? "" : removingHost.pathname}`}
+									{removing && removingHost ? (
+										<text style={{ ...styles.label }}>
+											{`${removing.username} · ${accountSetup[removing.provider].name} · ${removingHost.host}${removingHost.pathname === "/" ? "" : removingHost.pathname}`}
+										</text>
+									) : null}
+									<text style={styles.description}>
+										{removing?.credentialSource === "github-cli"
+											? "Removes this connection from 1git. You stay signed in to GitHub CLI."
+											: `Removes this account and its saved credentials from 1git. Your ${removing ? accountSetup[removing.provider].name : "hosting"} account and repositories stay unchanged.`}
 									</text>
-								) : null}
-								<text style={labelStyle}>
-									{removing?.credentialSource === "github-cli"
-										? "Removes this connection from 1git. You stay signed in to GitHub CLI."
-										: `Removes this account and its saved credentials from 1git. Your ${removing ? accountSetup[removing.provider].name : "hosting"} account and repositories stay unchanged.`}
-								</text>
-								{error ? (
-									<text
-										role="alert"
-										style={{ ...labelStyle, color: appTokens.colors.danger }}
-									>
-										{error}
-									</text>
-								) : null}
-								<div
-									style={{
-										display: "flex",
-										flexDirection: "row",
-										justifyContent: "flex-end",
-										gap: spacing[2],
-									}}
-								>
-									<Button
-										testId="account-remove-cancel"
-										size="sm"
-										variant="secondary"
-										tokens={appTokens}
-										disabled={busy}
-										onPress={() => {
-											setRemoving(undefined);
-											setError(undefined);
+									{error ? (
+										<text role="alert" style={{ ...styles.error }}>
+											{error}
+										</text>
+									) : null}
+									<div
+										style={{
+											display: "flex",
+											flexDirection: "row",
+											justifyContent: "flex-end",
+											gap: spacing[2],
 										}}
 									>
-										Cancel
-									</Button>
-									<Button
-										testId="account-remove-confirm"
-										size="sm"
-										tokens={appTokens}
-										disabled={busy || !removing}
-										onPress={() => {
-											if (!removing) return;
+										<Button
+											testId="account-remove-cancel"
+											size="sm"
+											variant="secondary"
+											tokens={appTokens}
+											disabled={busy}
+											onPress={() => {
+												setRemoving(undefined);
+												setError(undefined);
+											}}
+										>
+											Cancel
+										</Button>
+										<Button
+											variant="secondary"
+											textStyle={{ color: appTokens.colors.danger }}
+											testId="account-remove-confirm"
+											size="sm"
+											tokens={appTokens}
+											disabled={busy || !removing}
+											onPress={() => {
+												if (!removing) return;
 
-											const account = removing;
+												const account = removing;
 
-											void perform(async () => {
-												const next = await accounts.disconnect(account);
+												void perform(async () => {
+													const next = await accounts.disconnect(account);
 
-												if (mounted.current) {
-													setSaved(next);
-													setRemoving(undefined);
+													if (mounted.current) {
+														setSaved(next);
+														setRemoving(undefined);
 
-													if (addButton.current)
-														renderer.focusElement?.(addButton.current.id);
-												}
-											});
-										}}
-									>
-										{busy ? "Removing…" : "Remove account"}
-									</Button>
+														if (addButton.current)
+															renderer.focusElement?.(addButton.current.id);
+													}
+												});
+											}}
+										>
+											{busy ? "Removing…" : "Remove account"}
+										</Button>
+									</div>
 								</div>
-							</div>
-						</PopoverContent>
-					</Popover>
-				</>
-			)}
-		</AppShell>
+							</PopoverContent>
+						</Popover>
+					</>
+				)}
+			</div>
+		</div>
 	);
 }

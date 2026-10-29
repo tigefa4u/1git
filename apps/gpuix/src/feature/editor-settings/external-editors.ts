@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
+	existsSync,
 	mkdirSync,
 	readFileSync,
 	renameSync,
@@ -36,6 +37,8 @@ export interface EditorApplication {
 	readonly path: string;
 	readonly name: string;
 	readonly available: boolean;
+	/** Changes when an installed bundle is replaced; never persisted as a preference. */
+	readonly iconRevision?: string;
 }
 
 /** Extensions (leading dot) and exact filenames sharing one app-wide default. */
@@ -277,7 +280,9 @@ export class ExternalEditors {
 
 		ExternalEditors.requireApplicationPath(canonical);
 
-		if (!(await stat(canonical)).isDirectory())
+		const bundle = await stat(canonical);
+
+		if (!bundle.isDirectory())
 			throw new Error("Choose a macOS application (.app).");
 
 		const info = join(canonical, "Contents", "Info.plist");
@@ -305,7 +310,22 @@ export class ExternalEditors {
 			path: canonical,
 			name: basename(canonical).replace(/\.app$/i, ""),
 			available: true,
+			iconRevision: `${bundle.ino}:${bundle.mtimeMs}:${metadata.ino}:${metadata.mtimeMs}:${metadata.size}`,
 		};
+	}
+
+	private async detectApplication(
+		path: string
+	): Promise<EditorApplication | null> {
+		// Missing editors are normal during discovery; avoid rejected filesystem lookups.
+		if (!existsSync(path)) return null;
+
+		try {
+			return await this.application(path);
+		} catch {
+			// Invalid bundles do not prevent discovering other editors.
+			return null;
+		}
 	}
 
 	/** Warm common applications once per window; Settings explicitly refreshes discovery. */
@@ -318,14 +338,9 @@ export class ExternalEditors {
 		this.discovery = (async () => {
 			const candidates = await Promise.all(
 				this.applicationDirectories.flatMap((directory) =>
-					applicationNames.map(async (name) => {
-						try {
-							return await this.application(join(directory, name));
-						} catch {
-							// Detection is best-effort; custom locations remain available through the native picker.
-							return null;
-						}
-					})
+					applicationNames.map((name) =>
+						this.detectApplication(join(directory, name))
+					)
 				)
 			);
 
@@ -384,15 +399,18 @@ export class ExternalEditors {
 			[...saved].map(async (path) => {
 				if (!path) return;
 
-				try {
-					this.catalog.set(path, { ...(await this.application(path)), path });
-				} catch {
-					this.catalog.set(path, {
-						path,
-						name: basename(path).replace(/\.app$/i, ""),
-						available: false,
-					});
-				}
+				const application = await this.detectApplication(path);
+
+				this.catalog.set(
+					path,
+					application
+						? { ...application, path }
+						: {
+								path,
+								name: basename(path).replace(/\.app$/i, ""),
+								available: false,
+							}
+				);
 			})
 		);
 
@@ -549,5 +567,25 @@ export class ExternalEditors {
 			"/usr/bin/open",
 			application ? ["-a", application.path, absolute] : ["-t", absolute]
 		);
+	}
+
+	/** Opens a repository folder in the configured editor, preserving the same preference validation as file actions. */
+	async openDirectory(directory: string): Promise<void> {
+		if (process.platform !== "darwin")
+			throw new Error("Open in editor currently requires macOS.");
+
+		const absolute = await realpath(directory);
+
+		if (!(await stat(absolute)).isDirectory())
+			throw new Error("Only directories can be opened in an editor.");
+
+		const selected = ExternalEditors.resolve(absolute, this.preferences());
+
+		if (!selected)
+			throw new Error("Choose an external editor in Settings before opening.");
+
+		const application = await this.application(selected);
+
+		await this.run("/usr/bin/open", ["-a", application.path, absolute]);
 	}
 }

@@ -100,13 +100,41 @@ it("detects installed editors and restores a private preference in a fresh owner
 	expect(launches).toEqual([["-a", zed, file]]);
 });
 
+it("skips missing discovery candidates before application validation, including removed saved editors", async () => {
+	const zed = await editorApplication(applicationDirectory, "Zed.app");
+	const cursor = await editorApplication(applicationDirectory, "Cursor.app");
+
+	await editors.save(cursor);
+	await rm(cursor, { recursive: true });
+	const inspect = spyOn(editors, "application");
+	const options = await editors.options(true);
+
+	expect(options.selected).toBe(cursor);
+	expect(options.applications).toEqual([
+		{ path: cursor, name: "Cursor", available: false },
+		{
+			path: zed,
+			name: "Zed",
+			available: true,
+			iconRevision: expect.any(String),
+		},
+	]);
+	expect(inspect.mock.calls).toEqual([[zed]]);
+	expect(launches).toEqual([]);
+});
+
 it("accepts a custom application and passes its literal path as an argument, not a shell command", async () => {
 	const custom = await editorApplication(directory, "My Editor ' ; $().app");
 
 	await editors.save(custom);
 
 	expect((await editors.options()).applications).toEqual([
-		{ path: custom, name: "My Editor ' ; $()", available: true },
+		{
+			path: custom,
+			name: "My Editor ' ; $()",
+			available: true,
+			iconRevision: expect.any(String),
+		},
 	]);
 	await editors.open(file);
 	expect(launches).toEqual([["-a", custom, file]]);

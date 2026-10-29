@@ -1208,6 +1208,9 @@ it("leaves older sessions alone, offers replay in Settings and preserves the act
 		section: "accounts",
 	});
 	await click("rail-settings");
+	await click("settings-appearance");
+	root.renderer.scrollTo(node("appearance-settings-scroll").id, 0, -10000);
+	await settle();
 	await click("settings-run-setup");
 	expect(node("onboarding-view")).toBeDefined();
 	expect(node("appearance-dark").customProps?.["aria-description"]).toBe(
@@ -1481,7 +1484,7 @@ it("keeps the swipe hint discoverable on the space icon after setup", async () =
 	await Bun.sleep(400);
 	await settle();
 	expect(root.renderer.getAllText().join("\n")).toContain(
-		"Two-finger swipe to switch spaces"
+		"Two-finger swipe on the rail"
 	);
 
 	if (process.env.GPUIX_ONBOARDING_SCREENSHOT)

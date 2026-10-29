@@ -11,6 +11,8 @@ import { Button } from "@1git/gpuix-ui/button";
 import { useGpuixRequired, type PublicInstance } from "@gpuix/react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { repositoryFilterShortcuts } from "../lib/repository-filter-shortcut";
+import { Keybinds } from "../../keybinds/keybinds";
+import { useKeybinds } from "../../keybinds/keybind-context";
 
 import {
 	RepositoryWorkspaceModel,
@@ -19,6 +21,9 @@ import {
 } from "../lib/repository-workspace-model";
 import { repositoryViews, type WorkspaceEntry } from "../types";
 import { RepositoryList } from "./repository-list";
+import { RepositoryFileLayoutToggle } from "./repository-file-view";
+import { RepositoryConflictFiles } from "./repository-conflict-files";
+import type { FileMenuActions } from "./repository-file-menu";
 import { EmptyListPlaceholder } from "../../../fixture/empty-list-placeholder";
 import { StateMessage } from "../../../fixture/state-message";
 import { RepositoryCommit } from "./repository-commit";
@@ -182,14 +187,18 @@ function emptyListMessage(state: RepositoryWorkspaceState): string {
 export function RepositoryNavigation(
 	props: Omit<Parameters<typeof RepositoryNavigationContent>[0], "state"> & {
 		state: RepositoryWorkspaceState;
+		hidden?: boolean;
 	}
 ) {
 	if (props.state.view === "graph") return null;
 
+	const { hidden, ...contentProps } = props;
+
 	return (
 		<RepositoryNavigationContent
-			{...props}
+			{...contentProps}
 			state={{ ...props.state, view: props.state.view }}
+			hidden={hidden}
 		/>
 	);
 }
@@ -201,6 +210,8 @@ function RepositoryNavigationContent({
 	onRefresh,
 	history,
 	stashes,
+	stashCreateRequest,
+	onStashCreateRequestHandled,
 	onCommit,
 	onCancelCommit,
 	onAiSettings,
@@ -225,6 +236,7 @@ function RepositoryNavigationContent({
 	openFile,
 	externalEditors,
 	onPreviewIntent,
+	hidden,
 }: {
 	workspaceId: string;
 	state: RepositoryWorkspaceState & {
@@ -234,6 +246,8 @@ function RepositoryNavigationContent({
 	onRefresh: () => void;
 	history?: ReturnType<typeof useRepositoryHistory>;
 	stashes?: ReturnType<typeof useRepositoryStashes>;
+	stashCreateRequest?: number;
+	onStashCreateRequestHandled?: () => void;
 	onCommit?: () => void;
 	onCancelCommit?: () => void;
 	onAiSettings?: () => void;
@@ -258,12 +272,14 @@ function RepositoryNavigationContent({
 	openFile?: typeof RepositoryFileActions.open;
 	externalEditors?: ExternalEditors;
 	onPreviewIntent?: (entry: WorkspaceEntry | null) => void;
+	hidden?: boolean;
 }) {
 	const theme = useAppTheme();
 	const { tokens: appTokens, colors: appColors } = theme;
 	const { styles } = themedStyles.get(theme);
 
 	const renderer = useGpuixRequired();
+	const { overrides } = useKeybinds();
 	const { view } = state;
 	const [filterOpen, setFilterOpen] = useState(false);
 	const [query, setQuery] = useState("");
@@ -304,8 +320,15 @@ function RepositoryNavigationContent({
 			? decoratedHistory
 			: state.entries[view];
 
+	const conflictReview =
+		view === "changes" &&
+		((!!state.repository && state.repository.operation !== "normal") ||
+			state.entries.changes.some(
+				(entry) => entry.change?.recordType === "unmerged"
+			));
+
 	useEffect(() => {
-		if (!searchable) return;
+		if (hidden || !searchable) return;
 
 		repositoryFilterShortcuts.set(renderer, (close) => {
 			if (close) {
@@ -333,7 +356,15 @@ function RepositoryNavigationContent({
 		return () => {
 			repositoryFilterShortcuts.delete(renderer);
 		};
-	}, [renderer, view, filterOpen, searchable, historySearching, onAction]);
+	}, [
+		renderer,
+		view,
+		filterOpen,
+		searchable,
+		historySearching,
+		onAction,
+		hidden,
+	]);
 	useLayoutEffect(() => {
 		if (filterOpen && searchable && filterInput.current)
 			renderer.focusElement?.(filterInput.current.id);
@@ -418,6 +449,31 @@ function RepositoryNavigationContent({
 			? "No matching files"
 			: emptyListMessage(state);
 
+	const fileActions: FileMenuActions | undefined =
+		view === "changes" && state.repository && !state.preview && onDiscard
+			? {
+					root: state.repository.root,
+					head: state.repository.head,
+					branch: state.repository.branchName,
+					disabled:
+						RepositoryWorkspaceModel.isBusy(state) ||
+						state.loading ||
+						!!state.error ||
+						state.commit.needsReview,
+					canDiscard: state.repository.operation === "normal",
+					discard: onDiscard,
+					mutationError: state.operationMutation.error,
+					ignore: onIgnore,
+					include: conflictReview
+						? undefined
+						: (ids, included) =>
+								onAction({ type: "include-files", ids, included }),
+					open: openFile,
+					editors: externalEditors,
+					history: (file) => onAction({ type: "history-file", file }),
+				}
+			: undefined;
+
 	const list = (
 		<RepositoryRevert
 			state={state}
@@ -457,36 +513,26 @@ function RepositoryNavigationContent({
 						fileHistory?.revision,
 					])}
 					entries={entries}
+					fileTree={
+						view === "changes"
+							? {
+									scope: JSON.stringify([
+										workspaceId,
+										state.repository?.root,
+										"changes",
+									]),
+									allEntries: state.entries.changes,
+									filtering,
+									onInclude: (ids, included) =>
+										onAction({ type: "include-files", ids, included }),
+								}
+							: undefined
+					}
 					onContextMenu={
 						view === "history" && !state.preview ? onMenu : undefined
 					}
 					onPreviewIntent={view === "changes" ? onPreviewIntent : undefined}
-					fileActions={
-						view === "changes" &&
-						state.repository &&
-						!state.preview &&
-						onDiscard
-							? {
-									root: state.repository.root,
-									head: state.repository.head,
-									branch: state.repository.branchName,
-									disabled:
-										RepositoryWorkspaceModel.isBusy(state) ||
-										state.loading ||
-										!!state.error ||
-										state.commit.needsReview,
-									canDiscard: state.repository.operation === "normal",
-									discard: onDiscard,
-									mutationError: state.operationMutation.error,
-									ignore: onIgnore,
-									include: (ids, included) =>
-										onAction({ type: "include-files", ids, included }),
-									open: openFile,
-									editors: externalEditors,
-									history: (file) => onAction({ type: "history-file", file }),
-								}
-							: undefined
-					}
+					fileActions={fileActions}
 					label={
 						view === "changes"
 							? "Changed files"
@@ -542,15 +588,15 @@ function RepositoryNavigationContent({
 								}
 							: undefined
 					}
-					onSelect={(id, mode) =>
+					onSelect={(id, mode, visibleIds) =>
 						onAction({
 							type: "select",
 							view,
 							id,
 							mode,
-							visibleIds: filtering
-								? entries.map((entry) => entry.id)
-								: undefined,
+							visibleIds:
+								visibleIds ??
+								(filtering ? entries.map((entry) => entry.id) : undefined),
 						})
 					}
 					onScroll={(y) => onAction({ type: "scroll", view, y })}
@@ -569,7 +615,21 @@ function RepositoryNavigationContent({
 			testId="repository-navigation"
 			role="navigation"
 			aria-label="Repository navigation"
-			style={styles.navigation}
+			aria-hidden={hidden || undefined}
+			style={StyleSheet.compose(
+				styles.navigation,
+				hidden
+					? {
+							position: "absolute",
+							top: 0,
+							bottom: 0,
+							left: 0,
+							width: 0,
+							visibility: "hidden",
+							pointerEvents: "none",
+						}
+					: undefined
+			)}
 		>
 			<div testId="repository-views" style={styles.toolbar}>
 				<text
@@ -604,6 +664,9 @@ function RepositoryNavigationContent({
 					</text>
 				) : null}
 				<div style={{ flexGrow: 1 }} />
+				{view === "changes" && !conflictReview ? (
+					<RepositoryFileLayoutToggle testId="changes-file-layout" />
+				) : null}
 				{state.repository || state.repositoryPath ? (
 					<Button
 						testId="refresh-repository"
@@ -639,8 +702,8 @@ function RepositoryNavigationContent({
 						testId={view === "history" ? "filter-history" : "filter-changes"}
 						aria-label={
 							view === "history"
-								? "Search history (Command F)"
-								: "Search changed files (Command F)"
+								? `Search history (${Keybinds.label("find", overrides)})`
+								: `Search changed files (${Keybinds.label("find", overrides)})`
 						}
 						aria-expanded={filterOpen || historySearching}
 						variant="ghost"
@@ -828,12 +891,14 @@ function RepositoryNavigationContent({
 					/>
 				) : null}
 				{view === "changes" ? (
-					<RepositoryChangesHeader
-						state={state}
-						shown={filtering ? entries.length : undefined}
-						onAction={onAction}
-						onDiscard={onDiscard}
-					/>
+					conflictReview ? null : (
+						<RepositoryChangesHeader
+							state={state}
+							shown={filtering ? entries.length : undefined}
+							onAction={onAction}
+							onDiscard={onDiscard}
+						/>
+					)
 				) : historySearching || fileHistory ? (
 					<div style={styles.header}>
 						<text testId="repository-heading" style={styles.muted}>
@@ -843,9 +908,23 @@ function RepositoryNavigationContent({
 					</div>
 				) : null}
 				{view === "changes" ? (
-					list
+					conflictReview ? (
+						<RepositoryConflictFiles
+							key={workspaceId}
+							entries={entries}
+							state={state.views.changes}
+							fileActions={fileActions}
+							onPreviewIntent={onPreviewIntent}
+							onSelect={(id) =>
+								onAction({ type: "select", view: "changes", id })
+							}
+						/>
+					) : (
+						list
+					)
 				) : (
 					<RepositoryRevisions
+						workspaceId={workspaceId}
 						fileActions={
 							state.repository && !state.preview
 								? {
@@ -879,6 +958,8 @@ function RepositoryNavigationContent({
 								<RepositoryStashActions
 									state={state}
 									placement="create"
+									createRequest={stashCreateRequest}
+									onCreateRequestHandled={onStashCreateRequestHandled}
 									onWrite={onStash}
 								/>
 							</div>
@@ -923,8 +1004,8 @@ function RepositoryNavigationContent({
 						) : null}
 					</RepositoryRevisions>
 				)}
-				{view === "changes" &&
-				(state.preview || state.repository || state.repositoryPath) ? (
+				{conflictReview ? null : view === "changes" &&
+				  (state.preview || state.repository || state.repositoryPath) ? (
 					<RepositoryCommit
 						onAiSettings={onAiSettings}
 						state={state}

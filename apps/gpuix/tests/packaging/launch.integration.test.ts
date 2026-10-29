@@ -1,6 +1,6 @@
 /**
  * Covers: archive/helper integrity and foreground launch through macOS Launch Services.
- * Real: extracted signed app, native frames, and GPUIX's stdio automation protocol.
+ * Real: extracted signed app, native tree/image, and GPUIX's stdio automation protocol.
  * Doubles: fresh isolated session/accounts; no hosting or AI provider requests.
  * Requires: Apple Silicon macOS graphics access; run root test:package:macos.
  */
@@ -12,9 +12,17 @@ import {
 } from "../../src/feature/machines/remote-protocol";
 import { expect, it } from "bun:test";
 import { closeSync, constants, openSync, writeSync } from "node:fs";
-import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import {
+	mkdtemp,
+	readFile,
+	readdir,
+	rm,
+	stat,
+	writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
+import sharp from "sharp";
 import {
 	createSseDecoder,
 	encodeSse,
@@ -101,6 +109,13 @@ it("opens the extracted ZIP without a terminal or checkout-dependent resources",
 			"Contents/Resources/remote-helpers"
 		);
 
+		const launcher = resolve(bundle, "Contents/Resources/1git-launcher");
+
+		expect(await readFile(launcher, "utf8")).toContain(
+			"ONEGIT_LAUNCHER_MODE=1"
+		);
+		expect((await stat(launcher)).mode & 0o777).toBe(0o755);
+
 		expect((await readdir(helperDirectory)).sort()).toEqual(
 			remoteHelperTargets
 				.flatMap((target) => [`${target}.gz`, `${target}.json`])
@@ -152,6 +167,8 @@ it("opens the extracted ZIP without a terminal or checkout-dependent resources",
 			"GPUIX_PREVIEW=0",
 			"--env",
 			"GPUIX_BACKGROUND=0",
+			"--env",
+			`GPUIX_LAUNCHER_SOCKET=${resolve(directory, "launcher.sock")}`,
 		]);
 
 		const responses = new Map<number, AutomationResponse>();
@@ -215,21 +232,37 @@ it("opens the extracted ZIP without a terminal or checkout-dependent resources",
 		expect(pid).toBeGreaterThan(1);
 
 		const deadline = Date.now() + 10000;
-		let painted: string[] = [];
+		let text: string[] = [];
 
-		while (!painted.includes("Welcome to 1git") && Date.now() < deadline) {
-			painted = methods.getPaintedText.result.parse(
-				await request("getPaintedText", {})
+		while (!text.includes("Welcome to 1git") && Date.now() < deadline) {
+			text = methods.getAllText.result.parse(
+				await request("getAllText", {})
 			).text;
 			await Bun.sleep(50);
 		}
 
 		expect(
-			painted,
+			text,
 			await Bun.file(resolve(directory, "stderr.log")).text()
 		).toContain("Welcome to 1git");
-		expect(painted).toContain("Continue");
-		expect(painted).not.toContain("Uncaught runtime errors:");
+		expect(text).toContain("Continue");
+		expect(text).not.toContain("Uncaught runtime errors:");
+		// The last-frame text log can be empty when GPUI reuses cached drawing.
+		const screenshot = resolve(directory, "launch.png");
+		let rendered = false;
+
+		do {
+			await request("screenshot", { path: screenshot });
+			const pixels = await sharp(screenshot).stats();
+
+			rendered = pixels.channels.slice(0, 3).some(({ stdev }) => stdev > 2);
+
+			if (!rendered) await Bun.sleep(50);
+		} while (!rendered && Date.now() < deadline);
+
+		expect(rendered, "The native window must render beyond a blank frame").toBe(
+			true
+		);
 	} finally {
 		// If initialization failed, locate only this test's unique extracted executable.
 		if (pid === undefined) {

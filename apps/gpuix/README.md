@@ -16,6 +16,30 @@ bun run --cwd apps/gpuix build:native
 bun run --cwd apps/gpuix dev
 ```
 
+## Command-line launcher
+
+The packaged app includes a `1git` launcher for opening or focusing the running
+app from a terminal. `1git` opens the app, while `1git .` and `1git /path/to/project`
+open the selected local path. Existing app instances receive the request through
+a per-user Unix socket; a first launch starts the app with the path as its argument.
+Paths that are not repositories continue through the app's normal setup flow.
+
+Install or remove the command from **Settings → Application**. Installation first
+offers `/usr/local/bin` with the macOS administrator prompt, then
+`~/.local/bin` when no administrator access is available. The installed command is
+a symlink to the launcher script inside the app bundle and does not copy the app.
+If you use the per-user location, ensure `~/.local/bin` is on your shell's `PATH`
+(for example, `export PATH="$HOME/.local/bin:$PATH"`).
+
+Development accepts the same argument: `bun run dev:app -- /path/to/project`.
+Relative paths resolve from the directory where that command is run, even though
+Turbo starts the app task from `apps/gpuix`.
+Only local filesystem paths are accepted; URLs and other remote inputs are rejected.
+
+`bun run --cwd apps/gpuix test` gives native component journeys a 30-second
+per-test limit, including full Settings and onboarding flows. Scrolling tests
+retain their separate frame-time and React-render budgets.
+
 Both GPUIX packages stay pinned to `0.10.0`. This app runs on Bun, React 19,
 and GPUIX. The window uses native macOS sidebar vibrancy
 and traffic lights. Titlebar and rail backgrounds stay transparent by default in both themes;
@@ -447,6 +471,30 @@ The app disables focus outlines through its shared native UI tokens and custom
 row/tab styling. Arrow/Tab navigation, selection backgrounds, caret visibility,
 and keyboard activation remain intact; ordinary field borders are unchanged.
 
+## Keybinds
+
+Open **Settings → Keybinds** to search application, Space, tab, and repository
+shortcuts. Click an editable shortcut, press the new combination, and select
+**Save**. Conflicting bindings and reserved editing/system keys are rejected.
+**Reset** restores one action; **Restore defaults** restores all actions.
+
+**Command–R** fetches the active repository, then refreshes its local state.
+Repositories without remotes refresh locally. **Command–T** opens an empty tab
+with the repository palette focused; choosing a repository fills that tab.
+**Command–P** opens the repository and action palette; prefix the search with
+`>` to show actions only. **Command–Comma** opens or focuses the single Settings
+tab. Settings and empty tabs use the same close and navigation shortcuts as
+repository tabs.
+
+Use **Control–Command–Left/Right** to move to the previous/next Space in saved
+order, stopping at either end. Customize both shortcuts in the **Spaces** section.
+
+Custom bindings apply immediately to this window and persist with its saved
+session. Space, tab and repository commands, filtering (including clone search), commit
+submission, and diff context expansion support customization. Commit and diff
+actions still require their respective controls to have focus. The macOS
+Settings menu shortcut, standard text editing, and control navigation stay fixed.
+
 ## Appearance
 
 Hover labels use a translucent, rounded surface with a subtle border and shadow,
@@ -467,8 +515,9 @@ not remount workspaces, clear drafts/inclusion, reload Git, or reset native diff
 from macOS's installed CoreText families. Font selections apply immediately; Reset
 restores the defaults. Changes preserve drafts and are saved with the session.
 
-**Show pane scrollbars** adds draggable, keyboard-operable bars to repository lists
-and diff panes. Their thin, translucent thumbs follow the window palette; idle
+**Show pane scrollbars** adds draggable, keyboard-operable bars to repository lists,
+diff panes, Settings pages, editor panels and Settings navigation. Their thin,
+translucent thumbs follow the window palette; idle
 tracks stay clear. Native layout, painting and pointer handling keep the thumb
 synchronized with the pane without JavaScript polling or React updates while scrolling.
 Pane bars paint below floating controls, so tab menus cover them and receive pointer
@@ -544,11 +593,16 @@ linked worktrees share them; closing a tab does not discard the choice. Existing
 sessions and repositories without a color retain the default palette.
 The repo palette tints native-blurred chrome, controls, selection surfaces and a
 faint content wash. The deterministic grain is rasterized once into shared light/dark
-lossless WebP textures, which the GPU scales during resize instead of rasterizing a new
-window-sized SVG mask. Fine grain remains visible on colored and neutral windows,
+1000 × 1000 lossless WebP tiles. A 4 × 4 grid preserves the original texture density
+and centered square while reducing decoded pixels from 122 MiB to under 8 MiB
+for both appearances combined. The GPU scales these shared tiles during resize
+instead of rasterizing a new window-sized SVG mask. Fine grain remains visible
+on colored and neutral windows,
 including Home and Settings, beneath chrome
 controls, never over code. Its density and light/dark opacity keep
 it readable over the blur without animation, filters or an input target.
+**Settings → Appearance → Grain texture** turns it on or off immediately across
+the window. Grain defaults on, and the choice is saved with the session.
 Illustrations repeat one fixed 256 × 256 SVG tile per preset, shared across colors
 and window sizes rather than rasterizing a window-sized wallpaper. The layer ignores
 pointer input, is hidden from accessibility, and leaves the native blurred material
@@ -1592,9 +1646,15 @@ accessible label. Counts come from the last known remote refs, not live polling.
 - Pull/Push reuse authenticated, guarded upstream sync: fetch first, fast-forward
   incoming commits only, then push to the exact tracking destination without force,
   mirrors, tags, automatic commits or stashes. Incoming changes require a clean tree.
-- If both counts are nonzero, the control fetches and opens a review dialog.
-  It offers Compare and points to Merge or rebase in the tab menu; it never
-  silently merges, rebases or force-pushes.
+- If both counts are nonzero, the control fetches and opens a populated sync review
+  against the configured upstream. Incoming/Outgoing switch between each side's
+  commits and changes since their common ancestor. Merge and Rebase each show an
+  button-anchored confirmation pinned to both reviewed tips; dirty or stale workspaces
+  remain reviewable with an explanation of what must be resolved before writing.
+  Escape cancels the confirmation, then leaves the review. Conflicts open Changes
+  with its existing Continue/Abort controls. Successful integration returns directly
+  to Changes. Push remains a separate action on the rail using the refreshed count
+  and exact upstream destination; nothing silently integrates, pushes or force-pushes.
 - Without remotes, the control opens the existing right-side Publish repository
   form. Without an upstream, it opens Publish branch: explicitly choose a remote
   with a single push URL and confirm. Changing HEAD/branch invalidates the choice;
@@ -1680,8 +1740,12 @@ scroll out of view or Home closes. Folder tiles continue to represent scan folde
   retain both index and worktree status. A clean tree has an explicit empty state.
 - External edits refresh automatically; the refresh icon remains available.
   Refresh retains the draft, selected path, and existing checkbox choices;
-  removed paths disappear and new paths start included. On failure the previous
+  removed paths disappear and new paths start unchecked. On failure the previous
   data stays visible with a stale-data notice.
+- Files start unchecked when opening a repository. **Settings → Git → Automatically
+  include changed files** opts into including all files on open and newly appearing
+  files on refresh. The preference defaults off and is saved with the session;
+  changing it leaves existing choices intact. **Select all** remains available.
 - Reads belong to their original tab, even after switching/reordering. Closing a
   tab or unmounting cancels pending reads and ignores late picker/read results.
 - **Checkboxes select changes for the next commit, not Git staging.** Toggling
@@ -2266,11 +2330,24 @@ hot reload cannot replace a loaded addon. This bridge is macOS-only.
 
 ### Manual conflict resolution
 
-- Conflicted Changes rows show a red status icon and **Conflict** label. Selecting
-  one shows the read-only working file, including its conflict markers.
-- **Open in editor** uses the same file-type rules and overall **External editor**
+- Changes groups unresolved files above other changes, with an amber **Unresolved**
+  badge. Commit-inclusion controls and the ordinary draft editor are hidden while
+  reviewing an active operation; the draft is retained for returning to normal work.
+- Selecting a conflict opens an aligned split diff: the selected indexed version
+  on the left, and the unchanged working result, including markers, on the right.
+  Both columns share vertical scrolling, with syntax highlighting, original line
+  numbers and highlighted changes. Unchanged gaps start collapsed; clicking a hunk
+  header or trailing context action expands them from the already-read text.
+- Switch **Current** / **Incoming** to compare either source with the same result.
+  Rebase sources are labelled **Upstream version** and **Replayed commit**. Versions
+  come from index stages 2/3, not reconstructed conflict-marker text. Missing, binary
+  or oversized sources show an explanation instead of a partial preview.
+- The result header shows the remaining conflict-block count. **Mark resolved** is
+  disabled while marker lines remain. **Use this version…** requires whole-file
+  replacement confirmation pinned to the reviewed content hash and indexed blob.
+- **Open editor** uses the same file-type rules and overall **External editor**
   preference (macOS's default text editor until changed), never a repository-provided shell command.
-  Save edits there, then **Refresh preview**.
+  Save edits there, then **Refresh**.
 - **Mark resolved** stages only the reviewed file. It rechecks HEAD/branch,
   conflict status, regular-file safety, UTF-8 content, remaining marker lines,
   and the preview's content hash. It does not commit, continue/abort a merge or
@@ -2287,7 +2364,8 @@ hot reload cannot replace a loaded addon. This bridge is macOS-only.
 
 ### Merge, squash merge, rebase, revert and cherry-pick completion
 
-- Changes shows the active merge/squash merge/rebase/revert/cherry-pick, conflict count, **Continue** and **Abort…**.
+- Changes shows a compact amber pause state for unresolved conflicts, **Continue**
+  and **Abort…**. Raw Git diagnostics are available in **Details…**.
 - Continue uses Git's staged resolutions and existing message, retaining hooks
   and signing. It never stages files or uses the commit-inclusion checkboxes.
   Unresolved conflicts or unstaged tracked edits block continuation.

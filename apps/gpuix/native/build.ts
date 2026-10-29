@@ -48,7 +48,10 @@ import {
 	frameScrollbarPatchPath,
 	diffTrailingContextPatchPath,
 	scrollbarVisibilityPatchPath,
+	scrollbarVisibleRangePatchPath,
 	fontFamiliesPatchPath,
+	applicationIconsPatchPath,
+	applicationIconsPlatformPatchPath,
 	scrollMetricsPatchPath,
 	menuPlacementPlatformPatchPath,
 	systemAppearancePatchPath,
@@ -125,6 +128,7 @@ if (
 		windowAppearancePlatformPatchPath,
 		systemAppearancePlatformPatchPath,
 		menuPlacementPlatformPatchPath,
+		applicationIconsPlatformPatchPath,
 	]);
 
 	const patches = [
@@ -171,7 +175,10 @@ if (
 		frameScrollbarPatchPath,
 		diffTrailingContextPatchPath,
 		scrollbarVisibilityPatchPath,
+		scrollbarVisibleRangePatchPath,
 		fontFamiliesPatchPath,
+		applicationIconsPatchPath,
+		applicationIconsPlatformPatchPath,
 		// Must follow the 1git feature patches: it edits their context.
 		...(isLinux ? [linuxPlatformPatchPath] : []),
 	];

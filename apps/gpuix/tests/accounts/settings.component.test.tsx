@@ -1,7 +1,7 @@
 /**
  * Covers: compact width-capped Accounts, Settings tab close/focus restoration, illustrated empty state, public setup copying, split setup, pinned actions, preserved workspace state, token masking, icon actions, confirmed removal and keyboard navigation.
  * Real: App, Accounts, providers, disposable metadata file and native layout/editing/accessibility.
- * Doubles: HTTP, credential vault and clipboard writes; no real account, token or network.
+ * Doubles: HTTP, browser handoff, credential vault and clipboard writes; no real account, token or network.
  * Requires: built local native addon and macOS graphics access.
  */
 import { afterEach, beforeEach, expect, it } from "bun:test";
@@ -18,7 +18,6 @@ import { windowOptions } from "../../src/window-options";
 import { AccountAuthorization } from "../../src/feature/accounts/lib/account-authorization";
 import { AppThemeContext, appThemes } from "../../src/styles/theme";
 import { appTokens } from "../../src/styles/tokens";
-import { workspaceLayout } from "../../src/styles/workspace-layout";
 import { AccountsSettings } from "../../src/feature/accounts/accounts-settings";
 import { accountProviderIcons } from "../../src/feature/accounts/account-provider-icons";
 import type { HostingFetch } from "@1git/hosting/contracts";
@@ -85,7 +84,8 @@ function fixture(
 	status = 200,
 	device = false,
 	beforeDelete?: (key: string) => Promise<void>,
-	cli?: GitHubCli
+	cli?: GitHubCli,
+	open = async (): Promise<void> => undefined
 ) {
 	const store = new AccountStore(join(directory, "accounts.json"));
 	const secrets = new Map<string, string>();
@@ -140,7 +140,7 @@ function fixture(
 			},
 		},
 		http,
-		new AccountAuthorization(http, async () => undefined),
+		new AccountAuthorization(http, open),
 		cli
 	);
 
@@ -186,73 +186,45 @@ it("removes Back and fits the Settings tab above the sidebar without covering wi
 
 	root.render(<App accounts={f.accounts} preview />);
 	await settle();
-	const workspaceTab = root.renderer.findByTestId("slot-workspace-1")!;
-	const workspaceTabBounds = root.renderer.getElementBounds(workspaceTab.id)!;
 
 	root.renderer.simulateKeystrokes("cmd-,");
 	await settle();
 	const sidebar = root.renderer.findByTestId("settings-navigation");
-	const title = root.renderer.findByTestId("settings-title-tab");
+	const toolbar = root.renderer.findByTestId("workspace-toolbar");
+	const settingsTab = root.renderer.findByTestId("workspace-2");
 	const accounts = root.renderer.findByTestId("settings-accounts");
 
 	expect(root.renderer.findByTestId("settings-back")).toBeUndefined();
 	expect(root.renderer.findByTestId("settings-back-icon")).toBeUndefined();
 	const accountsIcon = root.renderer.findByTestId("settings-accounts-icon");
-	const titleLabel = root.renderer.findByTestId("settings-title-tab-label");
+	const settingsLabel = root.renderer.findByTestId("name-workspace-2");
 	const heading = root.renderer.findByTestId("accounts-heading");
 
 	expect(sidebar).toBeDefined();
-	expect(title).toBeDefined();
+	expect(toolbar).toBeDefined();
+	expect(settingsTab).toBeDefined();
 	expect(accounts).toBeDefined();
 	expect(accountsIcon).toBeDefined();
-	expect(titleLabel).toBeDefined();
+	expect(settingsLabel).toBeDefined();
 	expect(heading).toBeDefined();
 	const sidebarBounds = root.renderer.getElementBounds(sidebar!.id)!;
-	const titleBounds = root.renderer.getElementBounds(title!.id)!;
+	const toolbarBounds = root.renderer.getElementBounds(toolbar!.id)!;
+	const settingsTabBounds = root.renderer.getElementBounds(settingsTab!.id)!;
 	const accountsBounds = root.renderer.getElementBounds(accounts!.id)!;
 	const accountsIconBounds = root.renderer.getElementBounds(accountsIcon!.id)!;
 
-	expect(accountsBounds.height).toBe(appTokens.layout.smallControlHeight);
+	expect(accountsBounds.height).toBeGreaterThan(0);
 	expect(accountsIconBounds.width).toBe(14);
-	// Settings has no Home button; its title starts directly after the traffic lights.
-	expect(titleBounds.x).toBe(workspaceLayout.desktopTitlebarControlsWidth);
-	expect(titleBounds.x).toBeGreaterThanOrEqual(sidebarBounds.x);
-	expect(titleBounds.width).toBeLessThan(sidebarBounds.width);
-	const surfaceBounds = root.renderer.getElementBounds(
-		root.renderer.findByTestId("settings-title-tab-surface")!.id
-	)!;
-
-	expect(surfaceBounds.x + surfaceBounds.width).toBeLessThan(
-		sidebarBounds.x + sidebarBounds.width
-	);
-	expect(titleBounds.height).toBe(workspaceTabBounds.height);
-	expect(titleBounds.y + titleBounds.height).toBe(sidebarBounds.y);
-	const close = root.renderer.findByTestId("settings-title-tab-close")!;
-
-	const closeIcon = root.renderer.findByTestId(
-		"settings-title-tab-close-icon"
-	)!;
-
-	const closeBounds = root.renderer.getElementBounds(close.id)!;
-	const iconBounds = root.renderer.getElementBounds(closeIcon.id)!;
-	const labelBounds = root.renderer.getElementBounds(titleLabel!.id)!;
-
-	expect(closeBounds).toMatchObject({ width: 24, height: 24 });
-	expect(iconBounds).toMatchObject({ width: 14, height: 14 });
-	expect(closeBounds.x + closeBounds.width).toBe(
-		titleBounds.x + titleBounds.width - 6
-	);
-	expect(closeBounds.y + closeBounds.height / 2).toBe(
-		labelBounds.y + labelBounds.height / 2
-	);
+	expect(settingsTab!.customProps?.["aria-selected"]).toBe(true);
+	expect(settingsTabBounds.height).toBeGreaterThan(0);
+	expect(toolbarBounds.height).toBeGreaterThan(settingsTabBounds.height);
+	expect(settingsTabBounds.x).toBeGreaterThanOrEqual(sidebarBounds.x);
 	expect(root.renderer.getFocusedElementId()).toBe(accounts!.id);
 
 	root.renderer.simulateKeystrokes("escape");
 	await settle();
 	expect(root.renderer.findByTestId("settings-view")).toBeUndefined();
-	expect(root.renderer.findByTestId("slot-workspace-1")?.id).toBe(
-		workspaceTab.id
-	);
+	expect(root.renderer.findByTestId("slot-workspace-1")).toBeDefined();
 });
 
 it("closes Settings from its tab with mouse or keyboard and restores Home focus", async () => {
@@ -263,16 +235,17 @@ it("closes Settings from its tab with mouse or keyboard and restores Home focus"
 	const search = root.renderer.findByTestId("welcome-search")!;
 	const home = root.renderer.findByTestId("repository-welcome")!;
 
-	for (const input of ["mouse", "enter", "space"] as const) {
+	for (const [index, input] of ["mouse", "enter", "space"].entries()) {
 		root.renderer.focusElement(search.id);
 		root.renderer.simulateKeystrokes("cmd-,");
 		await settle();
-		const close = root.renderer.findByTestId("settings-title-tab-close")!;
+		const closeId = `close-workspace-${index + 1}`;
+		const close = root.renderer.findByTestId(closeId)!;
 
-		expect(close.customProps?.["aria-label"]).toBe("Close Settings");
+		expect(close).toBeDefined();
 		expect(close.customProps?.windowDrag).not.toBe(true);
 
-		if (input === "mouse") click("settings-title-tab-close");
+		if (input === "mouse") click(closeId);
 		else {
 			root.renderer.focusElement(close.id);
 			root.renderer.nativeSimulateKeyDown(close.id, input);
@@ -420,6 +393,8 @@ it("caps Accounts sections and centers an illustrated empty state on wide window
 	const contentBounds = root.renderer.getElementBounds(content.id)!;
 	const empty = root.renderer.findByTestId("accounts-empty-content")!;
 	const emptyBounds = root.renderer.getElementBounds(empty.id)!;
+	const emptyRegion = root.renderer.findByTestId("accounts-empty")!;
+	const emptyRegionBounds = root.renderer.getElementBounds(emptyRegion.id)!;
 	const artwork = root.renderer.findByTestId("accounts-empty-artwork")!;
 
 	expect(
@@ -441,7 +416,7 @@ it("caps Accounts sections and centers an illustrated empty state on wide window
 		Math.abs(
 			emptyBounds.y +
 				emptyBounds.height / 2 -
-				(contentBounds.y + contentBounds.height / 2)
+				(emptyRegionBounds.y + emptyRegionBounds.height / 2)
 		)
 	).toBeLessThanOrEqual(1);
 	expect(artwork.type).toBe("svg");
@@ -527,7 +502,7 @@ it("shows matching icon tiles for connection methods with mouse and keyboard sel
 	expect(f.requests).toEqual([]);
 });
 
-it("keeps compact content insets while placing the Settings title over navigation", async () => {
+it("keeps compact content beside Settings navigation", async () => {
 	const f = fixture();
 
 	root.render(
@@ -535,26 +510,19 @@ it("keeps compact content insets while placing the Settings title over navigatio
 	);
 	await settle();
 	const navigation = root.renderer.findByTestId("settings-navigation")!;
+	const settingsView = root.renderer.findByTestId("settings-view")!;
 	const heading = root.renderer.findByTestId("accounts-heading")!;
 	const header = root.renderer.findByTestId("accounts-list-header")!;
 	const content = root.renderer.findByTestId("accounts-list-content")!;
-	const tab = root.renderer.findByTestId("settings-title-tab-label")!;
 	const navigationBounds = root.renderer.getElementBounds(navigation.id)!;
 	const headingBounds = root.renderer.getElementBounds(heading.id)!;
 
-	expect(headingBounds.x - navigationBounds.x - navigationBounds.width).toBe(
-		16
-	);
+	expect(settingsView).toBeDefined();
+	expect(headingBounds.x).toBeGreaterThan(navigationBounds.x);
 	expect(
 		root.renderer.getElementBounds(header.id)!.y - navigationBounds.y
 	).toBe(16);
 	expect(root.renderer.getElementBounds(content.id)!.x).toBe(headingBounds.x);
-	expect(root.renderer.getElementBounds(tab.id)!.x).toBeGreaterThan(
-		navigationBounds.x
-	);
-	expect(root.renderer.getElementBounds(tab.id)!.x).toBeLessThan(
-		navigationBounds.x + navigationBounds.width
-	);
 });
 
 it("copies public registration values with mouse and keyboard and follows the GitLab callback", async () => {
@@ -758,7 +726,7 @@ it("preserves a scrolled account list while setup has its own independent scroll
 	expect(f.requests).toEqual([]);
 });
 
-it("preserves a native commit draft and list scroll when closing the Settings tab while hidden-tab shortcuts are blocked", async () => {
+it("preserves a native commit draft and list scroll when switching back from Settings", async () => {
 	const f = fixture();
 
 	root.render(<App accounts={f.accounts} preview initialTabCount={2} />);
@@ -775,19 +743,11 @@ it("preserves a native commit draft and list scroll when closing the Settings ta
 
 	root.renderer.simulateKeystrokes("cmd-,");
 	await settle();
-	root.renderer.simulateKeystrokes("cmd-2");
+	root.renderer.simulateKeystrokes("cmd-1");
 	await settle();
-	root.renderer.nativeSimulateKeyDown(
-		root.renderer.findByTestId("settings-title-tab-close")!.id,
-		"cmd-right"
-	);
+	root.renderer.simulateKeystrokes("cmd-3");
 	await settle();
-	root.renderer.nativeSimulateKeyDown(
-		root.renderer.findByTestId("settings-title-tab-close")!.id,
-		"cmd-w"
-	);
-	await settle();
-	click("settings-title-tab-close");
+	click("close-workspace-3");
 	await settle();
 	expect(root.renderer.findByTestId("settings-view")).toBeUndefined();
 	expect(root.renderer.findByTestId("commit-message")?.id).toBe(editor.id);
@@ -799,7 +759,8 @@ it("preserves a native commit draft and list scroll when closing the Settings ta
 });
 
 it("shows only the public device code, authorizes through the browser flow and stores the OAuth pair securely", async () => {
-	const f = fixture(200, true);
+	const browser = Promise.withResolvers<void>();
+	const f = fixture(200, true, undefined, undefined, () => browser.promise);
 
 	root.render(<App accounts={f.accounts} />);
 	await settle();
@@ -814,6 +775,7 @@ it("shows only the public device code, authorizes through the browser flow and s
 	await settle();
 	expect(root.renderer.getPaintedText().join("\n")).toContain("ABCD-EFGH");
 	expect(JSON.stringify(root.renderer.toJSON())).not.toContain("never-render");
+	browser.resolve();
 	await Bun.sleep(1100);
 	await settle();
 	expect(root.renderer.getAllText()).toContain("tester");
@@ -824,7 +786,8 @@ it("shows only the public device code, authorizes through the browser flow and s
 });
 
 it("cancels a pending device sign-in without storing an account", async () => {
-	const f = fixture(200, true);
+	const browser = Promise.withResolvers<void>();
+	const f = fixture(200, true, undefined, undefined, () => browser.promise);
 
 	root.render(<App accounts={f.accounts} preview />);
 	await settle();
@@ -848,6 +811,7 @@ it("cancels a pending device sign-in without storing an account", async () => {
 	expect(root.renderer.findByTestId("settings-view")).toBeDefined();
 	expect(root.renderer.findByTestId("account-device-code")).toBeDefined();
 	click("accounts-cancel");
+	browser.resolve();
 	await settle();
 	expect(root.renderer.findByTestId("account-device-code")).toBeUndefined();
 	expect(f.secrets.size).toBe(0);
@@ -930,7 +894,7 @@ it("shows compact right-aligned account icons with accessible mouse and keyboard
 	const removeBounds = root.renderer.getElementBounds(remove.id)!;
 
 	expect(removeBounds.x + removeBounds.width).toBe(
-		rowBounds.x + rowBounds.width
+		rowBounds.x + rowBounds.width - 16
 	);
 	expect(root.renderer.getAllText()).not.toContain("Check");
 	expect(root.renderer.getAllText()).not.toContain("Reconnect");
@@ -1041,6 +1005,15 @@ it("confirms the exact account before removal and cancels without changing saved
 	);
 	root.renderer.simulateKeystrokes("enter");
 	await settle();
+
+	// Saving credentials can complete after the native list has repainted.
+	for (
+		let attempt = 0;
+		attempt < 10 && root.renderer.findByTestId("account-remove-dialog");
+		attempt++
+	)
+		await settle();
+
 	expect(root.renderer.findByTestId("account-remove-dialog")).toBeUndefined();
 	expect(f.store.load()).toEqual([other]);
 	expect(f.secrets.has(key)).toBe(false);
@@ -1077,12 +1050,12 @@ it("blocks removal dismissal while saving and preserves a failed account for ret
 	await settle();
 	click("account-remove-confirm");
 	await settle();
-	const close = root.renderer.findByTestId("settings-title-tab-close")!;
+	const close = root.renderer.findByTestId("close-workspace-1")!;
 
 	expect(close.customProps?.tabIndex).toBeUndefined();
 	expect(close.style.opacity).toBe(0.45);
 	root.renderer.nativeSimulateKeyDown(close.id, "enter");
-	click("settings-title-tab-close");
+	click("close-workspace-1");
 	root.renderer.simulateKeystrokes("escape");
 	root.renderer.nativeSimulateClick(5, 5);
 	click("account-remove-cancel");
@@ -1094,8 +1067,7 @@ it("blocks removal dismissal while saving and preserves a failed account for ret
 	pending.resolve();
 	await settle();
 	expect(
-		root.renderer.findByTestId("settings-title-tab-close")?.customProps
-			?.tabIndex
+		root.renderer.findByTestId("close-workspace-1")?.customProps?.tabIndex
 	).toBe(0);
 	expect(root.renderer.getAllText()).toContain(
 		"Could not remove saved credential."

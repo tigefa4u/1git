@@ -1,5 +1,5 @@
 /**
- * Covers: legacy migration, isolated tab ownership, membership, background results and session round trips.
+ * Covers: legacy migration, isolated tab ownership, safe space deletion, membership, background results and session round trips.
  * Real: space, tab and session models with in-memory repository snapshots.
  * Doubles: none.
  * Requires: none; no Git, SSH or user files.
@@ -74,6 +74,126 @@ it("navigates in saved space order and stops at the ends without wrapping", () =
 	expect(WorkspaceSpaces.destination(spaces, "default", "previous")).toBeNull();
 	expect(WorkspaceSpaces.destination(spaces, work, "next")).toBeNull();
 	expect(WorkspaceSpaces.destination(spaces, "missing", "next")).toBeNull();
+});
+
+it("deletes the active space while preserving its repositories, tabs and drafts in Default across restart", () => {
+	let state = WorkspaceTabsModel.reduce(create(), {
+		type: "add",
+		path: "/test/company",
+	});
+
+	state = WorkspaceTabsModel.reduce(state, {
+		type: "workspace",
+		id: "workspace-3",
+		action: { type: "edit-commit-message", value: "Work draft" },
+	});
+	const workspace = state.tabs[2]?.workspace;
+
+	const deleted = WorkspaceTabsModel.reduce(state, {
+		type: "space-delete",
+		id: work,
+	});
+
+	expect(deleted.spaces?.map((space) => space.id)).toEqual(["default"]);
+	expect(deleted.activeSpaceId).toBe("default");
+	expect(deleted.activeId).toBe("workspace-3");
+	expect(WorkspaceSpaces.tabs(deleted)).toHaveLength(3);
+	expect(deleted.tabs[2]?.workspace).toBe(workspace);
+	expect(WorkspaceSpaces.current(deleted)?.repositories).toEqual([
+		"/test/project",
+		"/test/second",
+		"/test/company",
+	]);
+	expect(state.tabs[2]?.spaceId).toBe(work);
+	expect(state.spaces).toHaveLength(2);
+	const restored = WorkspaceSession.restore(
+		WorkspaceSession.parse(JSON.stringify(WorkspaceSession.capture(deleted)))
+	);
+
+	expect(restored.spaces).toHaveLength(1);
+	expect(restored.activeSpaceId).toBe("default");
+	expect(restored.activeId).toBe("workspace-3");
+	expect(restored.tabs.map((tab) => tab.workspace.commitMessage)).toEqual([
+		"Keep draft",
+		"Another draft",
+		"Work draft",
+	]);
+});
+
+it("keeps the actually active repository tab when deleting its active space", () => {
+	let state = WorkspaceTabsModel.reduce(create(), {
+		type: "add",
+		path: "/test/company",
+	});
+
+	state = WorkspaceTabsModel.reduce(state, {
+		type: "add",
+		path: "/test/company-second",
+	});
+
+	state = WorkspaceTabsModel.reduce(state, {
+		type: "activate",
+		id: "workspace-4",
+	});
+
+	const deleted = WorkspaceTabsModel.reduce(state, {
+		type: "space-delete",
+		id: work,
+	});
+
+	expect(deleted.activeId).toBe("workspace-4");
+});
+
+it("deletes an inactive space without changing the current selection or duplicating repository membership", () => {
+	let state = WorkspaceTabsModel.reduce(create(), {
+		type: "add",
+		path: "/test/project",
+	});
+
+	state = WorkspaceTabsModel.reduce(state, {
+		type: "space-select",
+		id: "default",
+	});
+	const deleted = WorkspaceTabsModel.reduce(state, {
+		type: "space-delete",
+		id: work,
+	});
+
+	expect(deleted.activeSpaceId).toBe(state.activeSpaceId);
+	expect(deleted.activeId).toBe(state.activeId);
+	expect(deleted.tabs[2]?.spaceId).toBe("default");
+	expect(WorkspaceSpaces.current(deleted)?.repositories).toEqual([
+		"/test/project",
+		"/test/second",
+		"/test/company",
+	]);
+});
+
+it("protects Default and ignores attempts to delete a missing space", () => {
+	const state = create();
+
+	for (const id of ["default", "missing"])
+		expect(WorkspaceTabsModel.reduce(state, { type: "space-delete", id })).toBe(
+			state
+		);
+});
+
+it("assigns a late worktree result from a deleted space to Default instead of saving an orphan tab", () => {
+	const state = WorkspaceTabsModel.reduce(create(), {
+		type: "space-delete",
+		id: work,
+	});
+
+	const updated = WorkspaceTabsModel.reduce(state, {
+		type: "open-worktree",
+		spaceId: work,
+		snapshot: repositorySnapshot([]),
+	});
+
+	expect(updated.tabs.at(-1)?.spaceId).toBe("default");
+	expect(() =>
+		WorkspaceSession.parse(JSON.stringify(WorkspaceSession.capture(updated)))
+	).not.toThrow();
 });
 
 it("migrates current tabs and preferences into Default and starts a separate empty tab strip", () => {
@@ -229,4 +349,32 @@ it("validates names, one emoji grapheme and saved ownership before accepting a s
 			})
 		)
 	).toThrow("workspace");
+});
+
+it("persists optional space colours and drops invalid legacy colour values", () => {
+	const updated = WorkspaceTabsModel.reduce(create(), {
+		type: "space-edit",
+		id: work,
+		name: "Work",
+		icon: "work",
+		color: "#A478EF",
+	});
+
+	const document = WorkspaceSession.parse(
+		JSON.stringify(WorkspaceSession.capture(updated))
+	);
+
+	expect(document.spaces?.find((space) => space.id === work)?.color).toBe(
+		"#a478ef"
+	);
+	const corrupt = {
+		...document,
+		spaces: document.spaces?.map((space) => ({ ...space, color: "invalid" })),
+	};
+
+	expect(
+		WorkspaceSession.parse(JSON.stringify(corrupt)).spaces?.every(
+			(space) => space.color === undefined
+		)
+	).toBe(true);
 });

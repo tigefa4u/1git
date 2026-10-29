@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useState } from "react";
-import { spacing, typography, fontWeight } from "@1git/design-tokens";
 import { Button } from "@1git/gpuix-ui/button";
 import {
 	Select,
@@ -10,6 +9,9 @@ import {
 } from "@1git/gpuix-ui/select";
 import { useGpuixRequired } from "@gpuix/react";
 import { useAppTheme } from "../../styles/theme";
+import { settingsStyles } from "../settings/settings-layout";
+import { SettingsGroup, SettingsGroupRow } from "../settings/settings-group";
+import { spacing } from "@1git/design-tokens";
 import { defaultTypography } from "./app-typography";
 import { InstalledFonts } from "./installed-fonts";
 import { TextSizeSlider } from "./text-size-slider";
@@ -29,7 +31,8 @@ function FontPicker({
 	families: readonly string[];
 	onChange?: (value: string) => void;
 }) {
-	const { tokens } = useAppTheme();
+	const theme = useAppTheme();
+	const { tokens } = theme;
 
 	const items = useMemo(
 		() => [
@@ -42,55 +45,58 @@ function FontPicker({
 	);
 
 	return (
-		<div style={{ display: "flex", flexDirection: "column", gap: spacing[2] }}>
-			<text style={{ ...typography.sm, color: tokens.colors.text }}>
-				{label}
-			</text>
-			<Select
-				value={value || systemFont}
-				items={items}
-				disabled={!onChange}
-				onValueChange={(next) => {
-					if (next) onChange?.(next === systemFont ? "" : next);
-				}}
-			>
-				<SelectTrigger
-					testId={id}
-					aria-label={label}
-					tokens={tokens}
-					style={{ width: 280 }}
+		<SettingsGroupRow
+			testId={`${id}-row`}
+			label={label}
+			trailing={
+				<Select
+					value={value || systemFont}
+					items={items}
+					disabled={!onChange}
+					onValueChange={(next) => {
+						if (next) onChange?.(next === systemFont ? "" : next);
+					}}
 				>
-					<SelectValue tokens={tokens} />
-					<svg
-						aria-hidden
-						source='<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><path d="m4 6 4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>'
-						style={{
-							width: 12,
-							height: 12,
-							color: tokens.colors.textMuted,
-							pointerEvents: "none",
-						}}
-					/>
-				</SelectTrigger>
-				<SelectContent tokens={tokens} testId={`${id}-options`}>
-					{items.map((item) => (
-						<SelectItem
-							key={item.value}
-							value={item.value}
-							testId={`${id}-${item.value}`}
-							tokens={tokens}
-						>
-							{item.label}
-						</SelectItem>
-					))}
-				</SelectContent>
-			</Select>
-		</div>
+					<SelectTrigger
+						testId={id}
+						aria-label={label}
+						tokens={tokens}
+						style={{ width: 140 }}
+					>
+						<SelectValue tokens={tokens} />
+						<svg
+							aria-hidden
+							source='<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><path d="m4 6 4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>'
+							style={{
+								width: 12,
+								height: 12,
+								color: tokens.colors.textMuted,
+								pointerEvents: "none",
+							}}
+						/>
+					</SelectTrigger>
+					<SelectContent tokens={tokens} testId={`${id}-options`}>
+						{items.map((item) => (
+							<SelectItem
+								key={item.value}
+								value={item.value}
+								testId={`${id}-${item.value}`}
+								tokens={tokens}
+							>
+								{item.label}
+							</SelectItem>
+						))}
+					</SelectContent>
+				</Select>
+			}
+		/>
 	);
 }
 
 /** Installed-font pickers and a live, bounded text-size slider. */
 export function FontSettings() {
+	const styles = settingsStyles.get(useAppTheme());
+
 	const {
 		tokens,
 		typography: preferences = defaultTypography,
@@ -114,36 +120,49 @@ export function FontSettings() {
 	}, [renderer]);
 
 	return (
-		<div
-			style={{
-				display: "flex",
-				flexDirection: "column",
-				gap: spacing[2],
-				maxWidth: 480,
-			}}
+		<SettingsGroup
+			title="Text"
+			action={
+				<Button
+					testId="appearance-reset-fonts"
+					tokens={tokens}
+					variant="secondary"
+					size="sm"
+					disabled={!setTypography}
+					onPress={() => setTypography?.(defaultTypography)}
+				>
+					Reset
+				</Button>
+			}
 		>
-			<text
-				role="heading"
-				aria-level={2}
-				style={{
-					...typography.md,
-					fontWeight: fontWeight.medium,
-					color: tokens.colors.text,
-				}}
-			>
-				Text
-			</text>
-			<text
-				style={{ ...typography.sm, color: tokens.colors.text }}
-			>{`Text font size: ${preferences.fontSize} pt`}</text>
-			<TextSizeSlider
-				value={preferences.fontSize}
-				onChange={
-					setTypography
-						? (fontSize) => setTypography({ ...preferences, fontSize })
-						: undefined
+			<SettingsGroupRow
+				label="Font size"
+				trailing={
+					<div
+						style={{
+							display: "flex",
+							flexDirection: "row",
+							alignItems: "center",
+							gap: spacing[1],
+						}}
+					>
+						<TextSizeSlider
+							width={100}
+							value={preferences.fontSize}
+							onChange={
+								setTypography
+									? (fontSize) => setTypography({ ...preferences, fontSize })
+									: undefined
+							}
+						/>
+						<text
+							testId="appearance-font-size-value"
+							style={styles.description}
+						>{`${preferences.fontSize} pt`}</text>
+					</div>
 				}
 			/>
+
 			<FontPicker
 				id="appearance-ui-font"
 				label="Interface font"
@@ -168,23 +187,10 @@ export function FontSettings() {
 				}
 			/>
 			{error ? (
-				<text
-					role="status"
-					style={{ ...typography.sm, color: tokens.colors.textMuted }}
-				>
+				<text role="status" style={{ ...styles.description }}>
 					{error}
 				</text>
 			) : null}
-			<Button
-				testId="appearance-reset-fonts"
-				tokens={tokens}
-				variant="ghost"
-				style={{ alignSelf: "flex-start" }}
-				disabled={!setTypography}
-				onPress={() => setTypography?.(defaultTypography)}
-			>
-				Reset text settings
-			</Button>
-		</div>
+		</SettingsGroup>
 	);
 }

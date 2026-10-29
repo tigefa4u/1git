@@ -1,5 +1,7 @@
+import { SettingsGroup, SettingsGroupRow } from "../settings/settings-group";
+import { settingsStyles } from "../settings/settings-layout";
 import { useAppTheme } from "../../styles/theme";
-import { spacing, typography, fontWeight, iconSize } from "@1git/design-tokens";
+import { spacing, iconSize } from "@1git/design-tokens";
 import { Button } from "@1git/gpuix-ui/button";
 
 import { AccountStore, type SavedAccount } from "./lib/account-store";
@@ -37,16 +39,12 @@ export function AccountList({
 }) {
 	const theme = useAppTheme();
 	const { tokens: appTokens } = theme;
+	const styles = settingsStyles.get(theme);
 
 	return (
-		<div
-			style={{
-				display: "flex",
-				flexDirection: "column",
-				gap: spacing[5],
-				flexGrow: 1,
-				flexShrink: 0,
-			}}
+		<SettingsGroup
+			title="Connected accounts"
+			meta={`${accounts.length} ${accounts.length === 1 ? "account" : "accounts"}`}
 		>
 			{!accounts.length ? (
 				<div
@@ -74,17 +72,14 @@ export function AccountList({
 							role="heading"
 							aria-level={2}
 							style={{
-								...typography.lg,
-								fontWeight: fontWeight.medium,
-								color: appTokens.colors.text,
+								...styles.sectionTitle,
 							}}
 						>
 							No accounts connected.
 						</text>
 						<text
 							style={{
-								...typography.sm,
-								color: appTokens.colors.textMuted,
+								...styles.description,
 								textAlign: "center",
 							}}
 						>
@@ -113,95 +108,85 @@ export function AccountList({
 				] as const;
 
 				return (
-					<div
+					<SettingsGroupRow
 						key={key}
 						testId={`account-${key}`}
 						role="group"
 						aria-label={`${account.username} · ${accountSetup[account.provider].name}`}
-						style={{
-							display: "flex",
-							flexDirection: "row",
-							alignItems: "center",
-							gap: spacing[3],
-							flexShrink: 0,
-						}}
-					>
-						<svg
-							testId={`account-provider-icon-${key}`}
-							aria-hidden
-							source={accountProviderIcons[account.provider]}
-							style={{
-								width: 22,
-								height: 22,
-								flexShrink: 0,
-								color: appTokens.colors.textMuted,
-								pointerEvents: "none",
-							}}
-						/>
-						<div
-							testId={`account-info-${key}`}
-							style={{
-								display: "flex",
-								flexDirection: "column",
-								gap: spacing[0.5],
-								flexGrow: 1,
-								flexBasis: 0,
-								minWidth: 0,
-							}}
-						>
-							<text
-								testId={`account-name-${key}`}
-								style={{ ...typography.md, color: appTokens.colors.text }}
-							>
+						contentTestId={`account-info-${key}`}
+						leading={
+							<svg
+								testId={`account-provider-icon-${key}`}
+								aria-hidden
+								source={accountProviderIcons[account.provider]}
+								style={{
+									width: 22,
+									height: 22,
+									flexShrink: 0,
+									color: appTokens.colors.textMuted,
+									pointerEvents: "none",
+								}}
+							/>
+						}
+						label={
+							<text testId={`account-name-${key}`} style={{ ...styles.label }}>
 								{account.username}
 							</text>
+						}
+						description={
 							<text
 								testId={`account-status-${key}`}
-								style={{ ...typography.sm, color: appTokens.colors.textMuted }}
+								style={{ ...styles.description, marginTop: spacing[0.5] }}
 							>
 								{`${host.host}${host.pathname === "/" ? "" : host.pathname} · ${account.credentialSource === "github-cli" ? "GitHub CLI · " : ""}${status[key] ?? "Not checked"}`}
 							</text>
-						</div>
-						<div
-							style={{ display: "flex", flexDirection: "row", gap: spacing[1] }}
-						>
-							{actions.map((action) => (
-								<Button
-									key={action.name}
-									size="sm"
-									variant="ghost"
-									tokens={appTokens}
-									disabled={disabled}
-									aria-label={action.label}
-									testId={`account-${action.name}-${key}`}
-									style={{
-										width: 26,
-										height: 26,
-										paddingLeft: spacing[0],
-										paddingRight: spacing[0],
-									}}
-									onPress={() => action.onPress(account)}
-								>
-									<svg
-										testId={`account-${action.name}-icon-${key}`}
-										aria-hidden
-										source={actionIcons[action.name]}
+						}
+						trailing={
+							<div
+								style={{
+									display: "flex",
+									flexDirection: "row",
+									gap: spacing[1],
+								}}
+							>
+								{actions.map((action) => (
+									<Button
+										key={action.name}
+										size="sm"
+										variant="ghost"
+										tokens={appTokens}
+										disabled={disabled}
+										aria-label={action.label}
+										testId={`account-${action.name}-${key}`}
 										style={{
-											width: iconSize.sm,
-											height: iconSize.sm,
-											pointerEvents: "none",
-											color:
-												action.name === "remove"
-													? appTokens.colors.danger
-													: appTokens.colors.textMuted,
+											width: 26,
+											height: 26,
+											paddingLeft: spacing[0],
+											paddingRight: spacing[0],
 										}}
-									/>
-								</Button>
-							))}
-						</div>
-					</div>
+										onPress={() => action.onPress(account)}
+									>
+										<svg
+											testId={`account-${action.name}-icon-${key}`}
+											aria-hidden
+											source={actionIcons[action.name]}
+											style={{
+												width: iconSize.sm,
+												height: iconSize.sm,
+												pointerEvents: "none",
+												color:
+													action.name === "remove"
+														? appTokens.colors.danger
+														: appTokens.colors.textMuted,
+											}}
+										/>
+									</Button>
+								))}
+							</div>
+						}
+					/>
 				);
 			})}
-		</div>
+		</SettingsGroup>
 	);
 }

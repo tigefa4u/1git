@@ -163,6 +163,18 @@ export const scrollbarVisibilityPatchPath = resolve(
 	import.meta.dir,
 	"scrollbar-visibility.patch"
 );
+export const scrollbarVisibleRangePatchPath = resolve(
+	import.meta.dir,
+	"scrollbar-visible-range.patch"
+);
+export const applicationIconsPatchPath = resolve(
+	import.meta.dir,
+	"application-icons.patch"
+);
+export const applicationIconsPlatformPatchPath = resolve(
+	import.meta.dir,
+	"application-icons-platform.patch"
+);
 export const fontFamiliesPatchPath = resolve(
 	import.meta.dir,
 	"font-families.patch"
@@ -218,7 +230,10 @@ export const nativeBuildId = createHash("sha256")
 	.update(readFileSync(frameScrollbarPatchPath))
 	.update(readFileSync(diffTrailingContextPatchPath))
 	.update(readFileSync(scrollbarVisibilityPatchPath))
+	.update(readFileSync(scrollbarVisibleRangePatchPath))
 	.update(readFileSync(fontFamiliesPatchPath))
+	.update(readFileSync(applicationIconsPatchPath))
+	.update(readFileSync(applicationIconsPlatformPatchPath))
 	.update(
 		process.platform === "linux" ? readFileSync(linuxPlatformPatchPath) : ""
 	)

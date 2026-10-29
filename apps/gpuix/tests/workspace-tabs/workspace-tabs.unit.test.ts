@@ -37,6 +37,7 @@ it("removes restored worktree tabs and drafts from the saved session after confi
 		activeId: "workspace-2",
 		tabs: initial.tabs.map((tab, index) => ({
 			...tab,
+			kind: "repository" as const,
 			workspace: {
 				...tab.workspace,
 				repositoryPath: index === 0 ? "/main" : "/linked",
@@ -107,6 +108,7 @@ it("adds unique tabs without mutating the input and keeps the active tab on an i
 
 	expect(initial.tabs).toHaveLength(1);
 	expect(added.tabs).toHaveLength(2);
+	expect(added.tabs[1]?.name).toBe("Welcome");
 	expect(closed.activeId).toBe("workspace-2");
 	expect(Model.reduce(closed, { type: "add" }).activeId).toBe("workspace-3");
 });
@@ -128,6 +130,33 @@ it("seeds a multi-tab preview and supports starting on Home without placeholder 
 	for (const count of [-1, 1.5, Number.POSITIVE_INFINITY]) {
 		expect(() => Model.create(count)).toThrow("non-negative integer");
 	}
+});
+
+it("creates empty tabs, fills the selected tab, and keeps one settings tab per space", () => {
+	let state = Model.create(0);
+
+	state = Model.reduce(state, { type: "add", kind: "empty" });
+	expect(state.tabs[0]).toMatchObject({ kind: "empty", name: "Welcome" });
+
+	state = Model.reduce(state, {
+		type: "fill",
+		id: "workspace-1",
+		path: "/test/project",
+	});
+	expect(state.tabs[0]).toMatchObject({
+		kind: "repository",
+		name: "project",
+		workspace: { repositoryPath: "/test/project", loading: true },
+	});
+
+	state = Model.reduce(state, { type: "open-settings" });
+	state = Model.reduce(state, { type: "open-settings", section: "appearance" });
+	expect(state.tabs.filter((tab) => tab.kind === "settings")).toHaveLength(1);
+	expect(state.activeId).toBe("workspace-2");
+
+	const closed = Model.reduce(state, { type: "close", id: "workspace-2" });
+
+	expect(closed.tabs.every((tab) => tab.kind !== "settings")).toBe(true);
 });
 
 it("closes to the right, then left, then empty, and can reopen from empty", () => {

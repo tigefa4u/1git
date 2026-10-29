@@ -18,6 +18,7 @@ export interface WorkspaceSpace {
 	readonly id: string;
 	readonly name: string;
 	readonly icon: string;
+	readonly color?: string;
 	readonly activeId: string | null;
 	readonly repositories: readonly string[];
 	readonly discovery: RepositoryDiscoveryPreferences;
@@ -31,16 +32,21 @@ export type SpaceDirection = "previous" | "next";
 export type WorkspaceSpaceAction =
 	| {
 			type: "space-create";
-			space: Pick<WorkspaceSpace, "id" | "name" | "icon" | "repositories">;
+			space: Pick<
+				WorkspaceSpace,
+				"id" | "name" | "icon" | "color" | "repositories"
+			>;
 			discovery: RepositoryDiscoveryPreferences;
 			library: RepositoryLibraryPreferences;
 	  }
 	| { type: "space-select"; id: string }
+	| { type: "space-delete"; id: string }
 	| {
 			type: "space-edit";
 			id: string;
 			name: string;
 			icon: string;
+			color?: string;
 	  }
 	| {
 			type: "space-preferences";
@@ -104,6 +110,12 @@ export class WorkspaceSpaces {
 						},
 					],
 				};
+	}
+
+	static color(value: unknown): string | undefined {
+		return typeof value === "string" && /^#[a-f0-9]{6}$/iu.test(value)
+			? value.toLowerCase()
+			: undefined;
 	}
 
 	static validIcon(icon: string): boolean {
@@ -173,6 +185,9 @@ export class WorkspaceSpaces {
 				id: record.id,
 				name: record.name.trim(),
 				icon: record.icon,
+				...(this.color(record.color)
+					? { color: this.color(record.color) }
+					: {}),
 				activeId: record.activeId,
 				repositories: this.paths(record.repositories),
 				discovery: RepositoryDiscovery.preferences(record.discovery),
@@ -228,6 +243,7 @@ export class WorkspaceSpaces {
 					{
 						...action.space,
 						name: action.space.name.trim(),
+						color: this.color(action.space.color),
 						repositories: this.paths(action.space.repositories),
 						activeId: null,
 						discovery: { folders: [], hidden: [] },
@@ -240,6 +256,56 @@ export class WorkspaceSpaces {
 		const target = state.spaces?.find((space) => space.id === action.id);
 
 		if (!target) return state;
+
+		if (action.type === "space-delete") {
+			if (target.id === "default") return state;
+
+			const deletingActive = target.id === state.activeSpaceId;
+
+			const defaultSpace = state.spaces?.find(
+				(space) => space.id === "default"
+			);
+
+			const activeRepositoryId = state.tabs.find(
+				(tab) =>
+					tab.id === state.activeId &&
+					tab.spaceId === target.id &&
+					tab.kind !== "settings"
+			)?.id;
+
+			const movedRepositoryId = state.tabs.find(
+				(tab) => tab.spaceId === target.id && tab.kind !== "settings"
+			)?.id;
+
+			const fallbackActiveId =
+				activeRepositoryId ??
+				movedRepositoryId ??
+				defaultSpace?.activeId ??
+				null;
+
+			return {
+				...state,
+				activeSpaceId: deletingActive ? "default" : state.activeSpaceId,
+				activeId: deletingActive ? fallbackActiveId : state.activeId,
+				tabs: state.tabs.map((tab) =>
+					tab.spaceId === target.id ? { ...tab, spaceId: "default" } : tab
+				),
+				spaces: state.spaces
+					?.filter((space) => space.id !== target.id)
+					.map((space) =>
+						space.id === "default"
+							? {
+									...space,
+									activeId: deletingActive ? fallbackActiveId : space.activeId,
+									repositories: this.paths([
+										...space.repositories,
+										...target.repositories,
+									]),
+								}
+							: space
+					),
+			};
+		}
 
 		if (action.type === "space-select") {
 			if (action.id === (state.activeSpaceId ?? "default")) return state;
@@ -278,6 +344,7 @@ export class WorkspaceSpaces {
 								...space,
 								name: action.name.trim(),
 								icon: action.icon,
+								color: this.color(action.color),
 							}
 						: {
 								...space,

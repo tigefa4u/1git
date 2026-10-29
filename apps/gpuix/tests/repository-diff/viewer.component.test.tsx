@@ -23,7 +23,7 @@ import { contextPatch } from "../_shared/context-patch";
 import { RepositoryDiff as DiffReader } from "../../src/feature/repository-workspace/lib/repository-diff";
 import { ImagePreviewDecoder } from "../../src/feature/repository-workspace/lib/image-preview";
 import { rasterContent, svgContent } from "../_shared/image-content";
-import { emptyHistory } from "../_shared/history-page";
+import { commitInfo, emptyHistory } from "../_shared/history-page";
 import { appTokens } from "../../src/styles/tokens";
 import { lightColors } from "@1git/design-tokens";
 
@@ -1139,7 +1139,15 @@ it("invalidates cached working pixels when a refresh changes content but not sta
 
 	spyOn(root.renderer, "promptForPaths").mockResolvedValue(["/test/project"]);
 	root.render(
-		<App readRepository={status} readDiff={reader} readHistory={emptyHistory} />
+		<App
+			readRepository={status}
+			readDiff={reader}
+			readHistory={emptyHistory}
+			readLastCommit={async () => ({
+				ok: true,
+				value: { commit: commitInfo(), undoUnavailableReason: null },
+			})}
+		/>
 	);
 	click("open-repository");
 	await settle();
@@ -1148,8 +1156,7 @@ it("invalidates cached working pixels when a refresh changes content but not sta
 	expect(root.renderer.getPaintedText()).toContain("before refresh");
 	content = "after refresh";
 	click("refresh-repository");
-	await settle();
-	await settle();
+	await waitFor(() => root.renderer.getPaintedText().includes("after refresh"));
 
 	expect(root.renderer.getPaintedText()).toContain("after refresh");
 	expect(root.renderer.getPaintedText()).not.toContain("before refresh");
@@ -1205,7 +1212,15 @@ it("disables retained conflict actions while another file is pending and never r
 							patch: "",
 							stats: [],
 							message: null,
-							conflict: { hash: "a hash", text: "a content" },
+							conflict: {
+								hash: "a hash",
+								text: "a content",
+								ours: {
+									text: "original",
+									label: "Current · main",
+									revision: "ours-blob",
+								},
+							},
 						},
 					],
 				})
@@ -1238,7 +1253,9 @@ it("disables retained conflict actions while another file is pending and never r
 	await settle();
 	render("b.txt");
 	await settle();
-	expect(element("conflict-content").customProps?.value).toBe("a content");
+	expect(element("conflict-content-content").customProps?.patch).toContain(
+		"+a content"
+	);
 	click("conflict-resolve");
 	expect(resolve).not.toHaveBeenCalled();
 	pending.resolve({
@@ -1300,7 +1317,7 @@ it("cancels stale selection reads, refreshes the selected path and never reloads
 	await settle();
 	expect(root.renderer.getPaintedText()).toContain("second file");
 	expect(root.renderer.getPaintedText()).not.toContain("stale first file");
-	click("include-b.ts");
+	click("include-a.ts");
 	click("commit-message");
 	root.renderer.simulateKeystrokes("d r a f t");
 	root.renderer.flush();

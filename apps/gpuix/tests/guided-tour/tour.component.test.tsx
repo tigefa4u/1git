@@ -292,6 +292,9 @@ it("pauses for Settings and replays from Appearance", async () => {
 	root.renderer.simulateKeystrokes("cmd-,");
 	await settle();
 	await click("settings-appearance");
+	root.renderer.scrollIntoView(node("settings-replay-tips").id);
+	root.renderer.advanceTime(1);
+	await settle();
 	await click("settings-replay-tips");
 	expect(node("tour-step-tab-menu")).toBeDefined();
 	root.render(<div />);
@@ -351,6 +354,9 @@ it("defers the swipe with one space and teaches it alone after creating a second
 	root.renderer.simulateKeystrokes("W o r k");
 	await settle();
 	await click("space-editor-save");
+	await settle();
+	expect(root.renderer.findByTestId("tour-coach-mark")).toBeUndefined();
+	root.renderer.simulateKeystrokes("escape");
 	await settle();
 	expect(node("tour-step-space-swipe")).toBeDefined();
 	expect(root.renderer.getAllText()).toContain("1 of 1");
