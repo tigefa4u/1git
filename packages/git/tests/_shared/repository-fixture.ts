@@ -123,8 +123,14 @@ export class RepositoryFixture {
 	}
 
 	async git(args: readonly string[], stdin?: string): Promise<string> {
+		// A bare `git tag <name>` opens an editor for a message; `GIT_EDITOR=true`
+		// saves an empty template, so tag creation fails with "no tag message?".
+		const tagCreation =
+			args[0] === "tag" &&
+			!args.some((arg) => arg === "-a" || arg.startsWith("-") || arg === "-d");
+
 		const output = await this.process.run({
-			args,
+			args: tagCreation ? ["tag", "--no-sign", ...args.slice(1)] : args,
 			cwd: this.repositoryPath,
 			stdin,
 		});

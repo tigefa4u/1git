@@ -2251,6 +2251,13 @@ export class GitRepository {
 				args.push("--force");
 			}
 
+			if (input.message === undefined) {
+				// A lightweight tag. Plain `git tag <name>` opens an editor for a
+				// message and fails unattended (`fatal: no tag message?`), so pin
+				// signing off and keep the tag object-free.
+				args.push("--no-sign");
+			}
+
 			if (input.message !== undefined) {
 				args.push(
 					"-a",

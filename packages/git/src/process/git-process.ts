@@ -308,7 +308,17 @@ export class GitProcess {
 	private spawn(input: GitCommandInput): ChildProcess {
 		return spawn(
 			this.executable,
-			["-c", "color.ui=false", "-c", "core.quotepath=false", ...input.args],
+			[
+				// `diff.mnemonicPrefix` rewrites `a/` `b/` to `i/` `w/`, which breaks
+				// diff parsing, so pin it off instead of inheriting the host config.
+				"-c",
+				"diff.mnemonicPrefix=false",
+				"-c",
+				"color.ui=false",
+				"-c",
+				"core.quotepath=false",
+				...input.args,
+			],
 			{
 				cwd: input.cwd,
 				env: {

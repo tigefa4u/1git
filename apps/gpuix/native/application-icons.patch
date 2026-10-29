@@ -1,17 +1,24 @@
 diff --git a/packages/native/src/renderer.rs b/packages/native/src/renderer.rs
 --- a/packages/native/src/renderer.rs
 +++ b/packages/native/src/renderer.rs
-@@ -1822,6 +1822,15 @@
+@@ -1822,6 +1822,22 @@
          ))
      }
  
 +    /// Return a bounded AppKit PNG without launching the application.
-+    #[cfg(target_os = "macos")]
 +    #[napi]
 +    pub fn get_application_icon(&self, path: String) -> Result<Option<Buffer>> {
-+        gpui_macos::application_icon_png(&path)
-+            .map(|image| image.map(Buffer::from))
-+            .map_err(|error| Error::from_reason(error.to_string()))
++        #[cfg(target_os = "macos")]
++        {
++            gpui_macos::application_icon_png(&path)
++                .map(|image| image.map(Buffer::from))
++                .map_err(|error| Error::from_reason(error.to_string()))
++        }
++        #[cfg(not(target_os = "macos"))]
++        {
++            let _ = path;
++            Ok(None)
++        }
 +    }
 +
      /// Installed CoreText families, without opening a system font panel.
@@ -20,17 +27,24 @@ diff --git a/packages/native/src/renderer.rs b/packages/native/src/renderer.rs
 diff --git a/packages/native/src/test_renderer.rs b/packages/native/src/test_renderer.rs
 --- a/packages/native/src/test_renderer.rs
 +++ b/packages/native/src/test_renderer.rs
-@@ -1256,6 +1256,15 @@
+@@ -1256,6 +1256,22 @@
          self.tree.lock().unwrap().root_id.map(|id| id as f64)
      }
  
 +    /// Return a bounded AppKit PNG without launching the application.
-+    #[cfg(target_os = "macos")]
 +    #[napi]
 +    pub fn get_application_icon(&self, path: String) -> Result<Option<Buffer>> {
-+        gpui_macos::application_icon_png(&path)
-+            .map(|image| image.map(Buffer::from))
-+            .map_err(|error| Error::from_reason(error.to_string()))
++        #[cfg(target_os = "macos")]
++        {
++            gpui_macos::application_icon_png(&path)
++                .map(|image| image.map(Buffer::from))
++                .map_err(|error| Error::from_reason(error.to_string()))
++        }
++        #[cfg(not(target_os = "macos"))]
++        {
++            let _ = path;
++            Ok(None)
++        }
 +    }
 +
      /// Installed families use the same catalog as the production renderer.
